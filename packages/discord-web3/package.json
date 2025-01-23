@@ -1,0 +1,38 @@
+{
+  "name": "discord-web3",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "preinstall": "npx only-allow pnpm",
+  "scripts": {
+    "build": "tsc -p tsconfig.lib.json",
+    "format": "prettier --write src",
+    "lint": "eslint src --fix",
+    "lint:check": "eslint src",
+    "format:check": "prettier src --check",
+    "fix": "pnpm format && pnpm lint",
+    "watch": "tsc -b --watch",
+    "husky": "husky install",
+    "e2e": "ts-node  -r tsconfig-paths/register node_modules/tape/bin/tape src/**/*.e2e.ts",
+    "test": "ts-node -r tsconfig-paths/register node_modules/tape/bin/tape src/**/*.test.ts src/*.test.ts src/**/**/*.test.ts",
+    "prepare": "ts-patch install",
+    "postinstall": "ts-patch install",
+    "pretest": "ts-patch install"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/rest": "^2.4.2",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "eslint": "^9.18.0",
+    "husky": "^9.1.7",
+    "prettier": "^3.2.5",
+    "tape": "^5.9.0",
+    "ts-node": "^10.9.2",
+    "ts-patch": "^3.3.0"
+  }
+}
