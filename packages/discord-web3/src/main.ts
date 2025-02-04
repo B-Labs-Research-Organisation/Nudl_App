@@ -11,11 +11,13 @@ import {
   TextInputStyle,
   ActionRowBuilder,
 } from "discord.js";
+import { User } from "./models"; // Import the User function
 
 dotenv.config();
 
 export function main(): void {
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  const userStore = User(); // Initialize the user store
 
   client.once("ready", async () => {
     console.log("Discord client is ready!");
@@ -32,6 +34,18 @@ export function main(): void {
       new SlashCommandBuilder()
         .setName("openmodal")
         .setDescription("Opens a modal to capture user input")
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("set_address")
+        .setDescription("Sets the address for a specific chainId")
+        .addIntegerOption(option =>
+          option.setName("chainid")
+            .setDescription("The chain ID")
+            .setRequired(true))
+        .addStringOption(option =>
+          option.setName("address")
+            .setDescription("The address to set")
+            .setRequired(true))
         .toJSON(),
     ];
 
@@ -70,6 +84,14 @@ export function main(): void {
         modal.addComponents(actionRow);
 
         await interaction.showModal(modal);
+      } else if (commandName === "set_address") {
+        if(interaction.isChatInputCommand(){
+          const chainId = interaction.options.getInteger("chainid", true);
+          const address = interaction.options.getString("address", true);
+          const userId = interaction.user.id;
+          userStore.setAddress(userId, chainId, address);
+          await interaction.reply(`Address set for chainId ${chainId}: ${address}`);
+        }
       }
     } else if (interaction.isModalSubmit()) {
       if (interaction.customId === "userInputModal") {
