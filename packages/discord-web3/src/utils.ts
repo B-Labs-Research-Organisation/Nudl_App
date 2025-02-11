@@ -1,3 +1,5 @@
+import assert from 'assert'
+
 export function getId(): string {
   return Math.random().toString(36).substr(2, 9);
 }
@@ -48,4 +50,19 @@ export const Chains = [
 ];
 
 
+export type RpcParams = {
+  id: string | undefined;
+  ip: string | undefined;
+  token: string | undefined;
+  params: JSON;
+  method: string;
+};
+export type RpcFunction = (params: RpcParams) => Promise<JSON | void>;
 
+export function RpcFactory(api:Record<string,(...args:unknown[])=>Promise<JSON | void> | JSON | void>):RpcFunction {
+  return async (params:RpcParams) => {
+    const method = api[params.method]
+    assert(method,'No method by that name')
+    return method(params.params)
+  }
+}

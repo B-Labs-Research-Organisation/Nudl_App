@@ -1,16 +1,7 @@
 import { Request, Response, NextFunction, Router } from "express";
-import {getId} from './utils'
+import {getId, RpcFunction} from './utils'
 
-export type RpcParams = {
-  id: string | undefined;
-  ip: string | undefined;
-  token: string | undefined;
-  params: JSON;
-  method: string;
-};
-export type Rpc = (params: RpcParams) => Promise<JSON | void>;
-
-export function Service(rpc: Rpc): Router {
+export function Service(rpc: RpcFunction): Router {
   const router = Router();
   router.post(
     "/:action",
