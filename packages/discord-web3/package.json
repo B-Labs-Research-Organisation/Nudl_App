@@ -17,13 +17,17 @@
     "test": "ts-node -r tsconfig-paths/register node_modules/tape/bin/tape src/**/*.test.ts src/*.test.ts src/**/**/*.test.ts",
     "prepare": "ts-patch install",
     "postinstall": "ts-patch install",
-    "pretest": "ts-patch install"
+    "pretest": "ts-patch install",
+    "start": "ts-node -r tsconfig-paths/register src/main.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@discordjs/rest": "^2.4.2",
+    "@types/body-parser": "^1.19.5",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "body-parser": "^1.20.3",
     "cookie-parser": "^1.4.7",

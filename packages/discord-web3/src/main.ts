@@ -12,6 +12,10 @@ import {
   ActionRowBuilder,
 } from "discord.js";
 import { User } from "./models"; // Import the User function
+import { Service } from "./express"; // Import the express service
+import {Api} from './api'
+import {RpcFactory} from './utils'
+import {Service as RouterService} from './router'
 
 dotenv.config();
 
@@ -85,7 +89,7 @@ export function main(): void {
 
         await interaction.showModal(modal);
       } else if (commandName === "set_address") {
-        if(interaction.isChatInputCommand(){
+        if(interaction.isChatInputCommand()){
           const chainId = interaction.options.getInteger("chainid", true);
           const address = interaction.options.getString("address", true);
           const userId = interaction.user.id;
@@ -102,6 +106,16 @@ export function main(): void {
   });
 
   client.login(process.env.DISCORD_TOKEN as string);
+
+  const api = Api();
+  const apiRpc = RpcFactory(api as any)
+  const apiRouter = RouterService(apiRpc)
+  // Run the express app
+  const app = Service({}, [{router:apiRouter,path:'/user'}]); // Assuming no routers are passed for now
+  const PORT = process.env.PORT || 3008;
+  app.listen(PORT, () => {
+    console.log(`Express server is running on port ${PORT}`);
+  });
 }
 
 main();
