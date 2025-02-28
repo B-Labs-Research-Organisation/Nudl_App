@@ -1,16 +1,16 @@
-import assert from 'assert'
+import assert from "assert";
 
 export function getId(): string {
   return Math.random().toString(36).substr(2, 9);
 }
 export function encodeKey(
   arr: (string | number)[],
-  delimiter: string = "!"
+  delimiter: string = "!",
 ): string {
   return arr.join(delimiter);
 }
 
-export function decodeKey(key: string, delimiter: string = "!"): (string | number)[] {
+export function decodeKey(key: string, delimiter: string = "!"): string[] {
   return key.split(delimiter);
 }
 export const Chains = [
@@ -49,6 +49,20 @@ export const Chains = [
   // { chainId: 84531, name: "Base Goerli Testnet", currency: "ETH" },
 ];
 
+export function mapChainsById(): Record<
+  number,
+  { name: string; currency: string }
+> {
+  return Chains.reduce(
+    (acc, { chainId, name, currency }) => {
+      acc[chainId] = { name, currency };
+      return acc;
+    },
+    {} as Record<number, { name: string; currency: string }>,
+  );
+}
+
+export const ChainsById = mapChainsById();
 
 export type RpcParams = {
   id: string | undefined;
@@ -59,10 +73,15 @@ export type RpcParams = {
 };
 export type RpcFunction = (params: RpcParams) => Promise<unknown | void>;
 
-export function RpcFactory(api:Record<string,(...args:unknown[])=>Promise<JSON | void> | JSON | void>):RpcFunction {
-  return async (params:RpcParams) => {
-    const method = api[params.method]
-    assert(method,'No method by that name')
-    return method(params.params)
-  }
+export function RpcFactory(
+  api: Record<
+    string,
+    (...args: unknown[]) => Promise<JSON | void> | JSON | void
+  >,
+): RpcFunction {
+  return async (params: RpcParams) => {
+    const method = api[params.method];
+    assert(method, "No method by that name");
+    return method(params.params);
+  };
 }
