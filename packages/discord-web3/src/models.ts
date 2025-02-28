@@ -1,3 +1,4 @@
+import { isAddress } from 'viem';
 import {encodeKey,decodeKey} from './utils'
 export interface Store<K, V> {
   set(key: K, value: V): this;
@@ -65,6 +66,9 @@ export function User() {
   const store = new MapStore<string, string>();
 
   function setAddress(userId: string, chainId: number, address: string): void {
+    if (!isAddress(address)) {
+      throw new Error('Invalid Ethereum address');
+    }
     const key = encodeKey([userId, chainId]);
     store.set(key, address);
   }

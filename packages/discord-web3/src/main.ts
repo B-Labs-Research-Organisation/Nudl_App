@@ -14,7 +14,7 @@ import {
 import { User } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import {Api} from './api'
-import {RpcFactory} from './utils'
+import {RpcFactory, Chains} from './utils'
 import {Service as RouterService} from './router'
 
 dotenv.config();
@@ -45,11 +45,18 @@ export function main(): void {
         .addIntegerOption(option =>
           option.setName("chainid")
             .setDescription("The chain ID")
-            .setRequired(true))
+            .setRequired(true)
+            .addChoices(
+              ...Chains.map(chain => ({ name: chain.name, value: chain.chainId }))
+            ))
         .addStringOption(option =>
           option.setName("address")
             .setDescription("The address to set")
             .setRequired(true))
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("list_addresses")
+        .setDescription("Lists all addresses for the user")
         .toJSON(),
     ];
 
@@ -71,30 +78,58 @@ export function main(): void {
     if (interaction.isCommand()) {
       const { commandName } = interaction;
 
-      if (commandName === "ping") {
-        await interaction.reply("Pong!");
-      } else if (commandName === "openmodal") {
-        const modal = new ModalBuilder()
-          .setCustomId("userInputModal")
-          .setTitle("User Input Modal");
+      try {
+        if (commandName === "ping") {
+          await interaction.reply("Pong!");
+        } else if (commandName === "openmodal") {
+          const modal = new ModalBuilder()
+            .setCustomId("userInputModal")
+            .setTitle("User Input Modal");
 
-        const input = new TextInputBuilder()
-          .setCustomId("userInput")
-          .setLabel("Enter your input")
-          .setStyle(TextInputStyle.Short);
+          const input = new TextInputBuilder()
+            .setCustomId("userInput")
+            .setLabel("Enter your input")
+            .setStyle(TextInputStyle.Short);
 
-        const actionRow =
-          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-        modal.addComponents(actionRow);
+          const actionRow =
+            new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+          modal.addComponents(actionRow);
 
-        await interaction.showModal(modal);
-      } else if (commandName === "set_address") {
-        if(interaction.isChatInputCommand()){
-          const chainId = interaction.options.getInteger("chainid", true);
-          const address = interaction.options.getString("address", true);
+          await interaction.showModal(modal);
+        } else if (commandName === "set_address") {
+          if (interaction.isChatInputCommand()) {
+            const chainId = interaction.options.getInteger("chainid", true);
+            const address = interaction.options.getString("address", true);
+            const userId = interaction.user.id;
+            await userStore.setAddress(userId, chainId, address);
+            await interaction.reply(
+              `Address set for chainId ${chainId}: ${address}`
+            );
+          }
+        } else if (commandName === "list_addresses") {
           const userId = interaction.user.id;
-          userStore.setAddress(userId, chainId, address);
-          await interaction.reply(`Address set for chainId ${chainId}: ${address}`);
+          const userAddresses = userStore.getUser(userId);
+          if (userAddresses.length === 0) {
+            await interaction.reply("No addresses set for any chains.");
+          } else {
+            const addressList = userAddresses
+              .map(({ chainId, address }) => `Chain ID ${chainId}: ${address}`)
+              .join("\n");
+            await interaction.reply(`Addresses set for chains:\n${addressList}`);
+          }
+        }
+      } catch (error) {
+        console.error("Error handling command:", error);
+        if (error instanceof Error) {
+          await interaction.reply({
+            content: error.message,
+            ephemeral: true,
+          });
+        } else {
+          await interaction.reply({
+            content: "An unknown error occurred.",
+            ephemeral: true,
+          });
         }
       }
     } else if (interaction.isModalSubmit()) {
