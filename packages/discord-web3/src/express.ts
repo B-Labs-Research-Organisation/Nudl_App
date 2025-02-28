@@ -10,7 +10,6 @@ import bodyParser from "body-parser";
 import bearerToken from "express-bearer-token";
 import cookieParser from "cookie-parser";
 
-
 export type Config = {
   secret?: string;
   hideStack?: boolean;
@@ -64,7 +63,7 @@ export function Service(
     err: ExtendedError | Error,
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     const request = {
       method: req.method,

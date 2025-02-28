@@ -1,16 +1,17 @@
-import { isAddress } from 'viem';
-import {encodeKey,decodeKey} from './utils'
+import { isAddress } from "viem";
+import { encodeKey, decodeKey } from "./utils";
 export interface Store<K, V> {
-  set(key: K, value: V): this;
-  get(key: K): V | undefined;
-  has(key: K): boolean;
-  delete(key: K): boolean;
-  clear(): void;
-  size: number;
-  keys(): IterableIterator<K>;
-  values(): IterableIterator<V>;
-  entries(): IterableIterator<[K, V]>;
+  set(key: K, value: V): Promise<this>;
+  get(key: K): Promise<V | undefined>;
+  has(key: K): Promise<boolean>;
+  delete(key: K): Promise<boolean>;
+  clear(): Promise<void>;
+  size(): Promise<number>;
+  keys(): Promise<IterableIterator<K>>;
+  values(): Promise<IterableIterator<V>>;
+  entries(): Promise<IterableIterator<[K, V]>>;
 }
+
 export class MapStore<K, V> implements Store<K, V> {
   private map: Map<K, V>;
 
@@ -18,40 +19,40 @@ export class MapStore<K, V> implements Store<K, V> {
     this.map = new Map<K, V>();
   }
 
-  set(key: K, value: V): this {
+  async set(key: K, value: V): Promise<this> {
     this.map.set(key, value);
     return this;
   }
 
-  get(key: K): V | undefined {
+  async get(key: K): Promise<V | undefined> {
     return this.map.get(key);
   }
 
-  has(key: K): boolean {
+  async has(key: K): Promise<boolean> {
     return this.map.has(key);
   }
 
-  delete(key: K): boolean {
+  async delete(key: K): Promise<boolean> {
     return this.map.delete(key);
   }
 
-  clear(): void {
+  async clear(): Promise<void> {
     this.map.clear();
   }
 
-  get size(): number {
+  async size(): Promise<number> {
     return this.map.size;
   }
 
-  keys(): IterableIterator<K> {
+  async keys(): Promise<IterableIterator<K>> {
     return this.map.keys();
   }
 
-  values(): IterableIterator<V> {
+  async values(): Promise<IterableIterator<V>> {
     return this.map.values();
   }
 
-  entries(): IterableIterator<[K, V]> {
+  async entries(): Promise<IterableIterator<[K, V]>> {
     return this.map.entries();
   }
 }
@@ -62,24 +63,34 @@ interface User {
   address: string;
 }
 
-export function User() {
+export function Users() {
   const store = new MapStore<string, string>();
 
-  function setAddress(userId: string, chainId: number, address: string): void {
+  async function setAddress(
+    userId: string,
+    chainId: number,
+    address: string,
+  ): Promise<void> {
     if (!isAddress(address)) {
-      throw new Error('Invalid Ethereum address');
+      throw new Error("Invalid Ethereum address");
     }
     const key = encodeKey([userId, chainId]);
-    store.set(key, address);
+    await store.set(key, address);
   }
 
-  function getAddress(userId: string, chainId: number): string | undefined {
+  async function getAddress(
+    userId: string,
+    chainId: number,
+  ): Promise<string | undefined> {
     const key = encodeKey([userId, chainId]);
-    return store.get(key);
+    return await store.get(key);
   }
 
-  function getUser(userId: string): { chainId: number; address: string }[] {
-    const userEntries = Array.from(store.entries()).filter(([key, _]) => {
+  async function getUser(
+    userId: string,
+  ): Promise<{ chainId: number; address: string }[]> {
+    const entries = await store.entries();
+    const userEntries = Array.from(entries).filter(([key, _]) => {
       const [storedUserId] = decodeKey(key);
       return storedUserId === userId;
     });
@@ -90,9 +101,23 @@ export function User() {
     });
   }
 
+  async function getUsersByChain(chainId: number) {
+    const entries = await store.entries();
+    return Array.from(entries)
+      .filter(([key, _]) => {
+        const [, storedChainId] = decodeKey(key);
+        return Number(storedChainId) === chainId;
+      })
+      .map(([key, address]) => {
+        const [userId, storedChainId] = decodeKey(key);
+        return { userId, chainId: Number(storedChainId), address };
+      });
+  }
+
   return {
     setAddress,
     getAddress,
     getUser,
+    getUsersByChain,
   };
 }

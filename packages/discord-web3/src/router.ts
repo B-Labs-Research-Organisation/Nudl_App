@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction, Router } from "express";
-import {getId, RpcFunction} from './utils'
+import { getId, RpcFunction } from "./utils";
 
 export function Service(rpc: RpcFunction): Router {
   const router = Router();
@@ -23,7 +23,7 @@ export function Service(rpc: RpcFunction): Router {
         // logger.error({ id, err }, `Rpc Error ${id}`);
         next(err);
       }
-    }
+    },
   );
 
   router.get(
@@ -46,9 +46,9 @@ export function Service(rpc: RpcFunction): Router {
         // logger.error({ id, err }, `Rpc Error ${id}`);
         next(err);
       }
-    }
+    },
   );
- return router;
+  return router;
 }
 
 export type Service = ReturnType<typeof Service>;
