@@ -64,12 +64,8 @@ export function main(): void {
         ) // Enable autocomplete for the address field
         .toJSON(),
       new SlashCommandBuilder()
-        .setName("list_addresses")
-        .setDescription("Lists all addresses for the user")
-        .toJSON(),
-      new SlashCommandBuilder()
-        .setName("admin_list_addresses")
-        .setDescription("Lists all addresses for a given chainId (Admin only)")
+        .setName("remove_address")
+        .setDescription("Removes the address for a specific chainId")
         .addIntegerOption((option) =>
           option
             .setName("chainid")
@@ -81,6 +77,55 @@ export function main(): void {
                 value: chain.chainId,
               })),
             ),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("address")
+            .setDescription("The address to remove")
+            .setRequired(true)
+            .setAutocomplete(true), // Enable autocomplete for the address field
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("list_addresses")
+        .setDescription("Lists all addresses for the user")
+        .toJSON(),
+      new SlashCommandBuilder()
+      // TODO: make chain optional, to list all chains if not speicifed
+      // TODO: make it possible to list by user
+      // TODO: make option to export to file
+      // TODO: filter by role
+        .setName("admin_list_addresses")
+        .setDescription("Lists all addresses for a given chainId (Admin only)")
+        .addIntegerOption((option) =>
+          option
+            .setName("chainid")
+            .setDescription("The chain ID")
+            .setRequired(false)
+            .addChoices(
+              ...Chains.map((chain) => ({
+                name: chain.name,
+                value: chain.chainId,
+              })),
+            ),
+        )
+        .addUserOption((option) =>
+          option
+            .setName("user")
+            .setDescription("The user to search for addresses")
+            .setRequired(false),
+        )
+        .addRoleOption((option) =>
+          option
+            .setName("role")
+            .setDescription("The role to filter addresses by")
+            .setRequired(false),
+        )
+        .addBooleanOption((option) =>
+          option
+            .setName("export")
+            .setDescription("Whether to export the addresses to a file")
+            .setRequired(false),
         )
         .toJSON(),
     ];
@@ -99,6 +144,8 @@ export function main(): void {
     }
   });
 
+  // TODO: add ability to remove address
+  // TODO: admin command to see who does not have an address set for a chain
   client.on("interactionCreate", async (interaction: Interaction) => {
     if (interaction.isCommand()) {
       const { commandName } = interaction;
@@ -132,6 +179,16 @@ export function main(): void {
               ephemeral: true,
             });
           }
+        } else if (commandName === "remove_address") {
+          if (interaction.isChatInputCommand()) {
+            const chainId = interaction.options.getInteger("chainid", true);
+            const userId = interaction.user.id;
+            await userStore.deleteAddress(userId, chainId); // Assuming delete method exists
+            await interaction.reply({
+              content: `Address removed for chainId ${chainId}.`,
+              ephemeral: true,
+            });
+          }
         } else if (commandName === "list_addresses") {
           const userId = interaction.user.id;
           const userAddresses = await userStore.getUser(userId);
@@ -142,7 +199,7 @@ export function main(): void {
               .map(({ chainId, address }) => {
                 const chain = ChainsById[chainId];
                 const name = chain ? chain.name : "Unknown Chain";
-                return `${name} (${chainId}): ${address}`;
+                return `${name}: ${address}`;
               })
               .join("\n");
             await interaction.reply({
@@ -163,31 +220,58 @@ export function main(): void {
               });
               return;
             }
-            const chainId = interaction.options.getInteger("chainid", true);
-            const allAddresses = await userStore.getUsersByChain(chainId);
-            if (allAddresses.length === 0) {
-              await interaction.reply(
-                `No addresses found for chainId ${chainId}.`,
-              );
-            } else {
-              const userPromises = allAddresses.map(async (user) => {
-                const discorduser = await client.users.fetch(user.userId);
-                return {
-                  userId: user.userId,
-                  displayName: discorduser.username,
-                  address: user.address,
-                  chainId: user.chainId,
-                };
-              });
 
-              const userAddressList = await Promise.all(userPromises);
-              const addressList = userAddressList
-                .map(({ userId, displayName, address }) => {
-                  return `User ID: ${userId}, Display Name: ${displayName}, Chain ID: ${chainId}, Address: ${address}`;
-                })
-                .join("\n");
+            const chainId = interaction.options.getInteger("chainid");
+            const user = interaction.options.getUser("user");
+            const exportToFile = interaction.options.getBoolean("export") || false;
+
+            let allAddresses = await userStore.getAllAddresses();
+            if (chainId !== null) {
+              allAddresses = await userStore.getUsersByChain(chainId);
+            }
+
+            const userAddresses = user ? allAddresses.filter(addr => addr.userId === user.id) : allAddresses;
+
+            if (user && userAddresses.length === 0) {
               await interaction.reply(
-                `Addresses for chainId ${chainId}:\n${addressList}`,
+                `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ''}.`,
+              );
+              return;
+            }
+
+            const userPromises = userAddresses.map(async (addr) => {
+              const discorduser = await client.users.fetch(addr.userId);
+              return {
+                userId: addr.userId,
+                displayName: discorduser.username,
+                address: addr.address,
+                chainId: addr.chainId,
+              };
+            });
+
+             
+              // TODO: show role in list 
+            const userAddressList = await Promise.all(userPromises);
+            const sortedUserAddressList = userAddressList.sort((a, b) => a.displayName.localeCompare(b.displayName));
+            const addressList = sortedUserAddressList
+              .map(({ userId, displayName, address, chainId }, index) => {
+                const chain = ChainsById[chainId];
+                const chainName = chain ? chain.name : "Unknown Chain";
+                return `${index + 1},${displayName},${userId},${address},${chainName}`;
+              })
+              .join("\n");
+            if (exportToFile) {
+              const csvContent = "Index,Display Name,User ID,Address,Chain\n" + addressList;
+              const buffer = Buffer.from(csvContent, 'utf-8');
+              await interaction.reply({
+                content: `All addresses have been exported as a CSV file.`,
+                files: [{ name: 'all_addresses.csv', attachment: buffer }],
+                ephemeral: true,
+              });
+            } else {
+              await interaction.reply(
+                user ? `Addresses for user ${user.username}:\n${addressList}` : 
+                `Addresses:\n${addressList}`
               );
             }
           }
@@ -211,14 +295,18 @@ export function main(): void {
       if (focusedOption.name === "address") {
         const userId = interaction.user.id;
         const userAddresses = await userStore.getUser(userId);
-        const choices = userAddresses.map(({ chainId, address }) => {
-          const chain = ChainsById[chainId];
-          const chainName = chain ? chain.name : "Unknown Chain";
-          return {
-            name: `${chainName} (${chainId}): ${address}`,
-            value: address,
-          };
-        });
+        // TODO: need to filter out other addresses if user input doesnt match
+        const userInput = interaction.options.getString("filter", false) || "";
+        const choices = userAddresses
+          .filter(({ address }) => address.includes(userInput))
+          .map(({ chainId, address }) => {
+            const chain = ChainsById[chainId];
+            const chainName = chain ? chain.name : "Unknown Chain";
+            return {
+              name: `${chainName} (${chainId}): ${address}`,
+              value: address,
+            };
+          });
         await interaction.respond(choices);
       }
     } else if (interaction.isModalSubmit()) {

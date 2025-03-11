@@ -5,7 +5,7 @@
   "main": "index.js",
   "preinstall": "npx only-allow pnpm",
   "scripts": {
-    "build": "tsc -p tsconfig.lib.json",
+    "build": "tsc -p tsconfig.json",
     "format": "prettier --write src",
     "lint": "eslint src --fix",
     "lint:check": "eslint src",

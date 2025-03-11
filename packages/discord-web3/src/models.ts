@@ -61,6 +61,7 @@ interface User {
   userId: string;
   chainId: number;
   address: string;
+  roleId: string;
 }
 
 export function Users() {
@@ -72,7 +73,7 @@ export function Users() {
     address: string,
   ): Promise<void> {
     if (!isAddress(address)) {
-      throw new Error("Invalid Ethereum address");
+      throw new Error("Invalid Address");
     }
     const key = encodeKey([userId, chainId]);
     await store.set(key, address);
@@ -84,6 +85,14 @@ export function Users() {
   ): Promise<string | undefined> {
     const key = encodeKey([userId, chainId]);
     return await store.get(key);
+  }
+
+  async function deleteAddress(
+    userId: string,
+    chainId: number,
+  ): Promise<boolean> {
+    const key = encodeKey([userId, chainId]);
+    return await store.delete(key);
   }
 
   async function getUser(
@@ -114,10 +123,20 @@ export function Users() {
       });
   }
 
+  async function getAllAddresses(): Promise<{ userId: string; chainId: number; address: string }[]> {
+    const entries = await store.entries();
+    return Array.from(entries).map(([key, address]: [string, string]) => {
+      const [userId, chainId] = decodeKey(key);
+      return { userId, chainId: Number(chainId), address };
+    });
+  }
+
   return {
     setAddress,
     getAddress,
     getUser,
     getUsersByChain,
+    getAllAddresses,
+    deleteAddress,
   };
 }
