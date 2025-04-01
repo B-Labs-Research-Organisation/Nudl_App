@@ -1,5 +1,7 @@
 import { isAddress } from "viem";
 import { encodeKey, decodeKey } from "./utils";
+import { createClient } from "redis";
+
 export interface Store<K, V> {
   set(key: K, value: V): Promise<this>;
   get(key: K): Promise<V | undefined>;
@@ -57,6 +59,86 @@ export class MapStore<K, V> implements Store<K, V> {
   }
 }
 
+export class RedisStore<K, V> implements Store<K, V> {
+  private client: ReturnType<typeof createClient>;
+  private partitionKey: string;
+
+  constructor(client: ReturnType<typeof createClient>, partitionKey: string) {
+    this.client = client;
+    this.partitionKey = partitionKey;
+  }
+
+  private getPartitionedKey(key: K): string {
+    return `${this.partitionKey}:${String(key)}`;
+  }
+
+  async set(key: K, value: V): Promise<this> {
+    await this.client.set(this.getPartitionedKey(key), JSON.stringify(value));
+    return this;
+  }
+
+  async get(key: K): Promise<V | undefined> {
+    const value = await this.client.get(this.getPartitionedKey(key));
+    return value ? JSON.parse(value) : undefined;
+  }
+
+  async has(key: K): Promise<boolean> {
+    const exists = await this.client.exists(this.getPartitionedKey(key));
+    return exists === 1;
+  }
+
+  async delete(key: K): Promise<boolean> {
+    const result = await this.client.del(this.getPartitionedKey(key));
+    return result === 1;
+  }
+
+  async clear(): Promise<void> {
+    const keys = await this.client.keys(`${this.partitionKey}:*`);
+    if (keys.length > 0) {
+      await this.client.del(keys);
+    }
+  }
+
+  async size(): Promise<number> {
+    const keys = await this.client.keys(`${this.partitionKey}:*`);
+    return keys.length;
+  }
+
+  async keys(): Promise<IterableIterator<K>> {
+    const keys = await this.client.keys(`${this.partitionKey}:*`);
+    return keys
+      .map((key) => key.replace(`${this.partitionKey}:`, "") as K)
+      [Symbol.iterator]();
+  }
+
+  async values(): Promise<IterableIterator<V>> {
+    const keys: string[] = await this.client.keys(`${this.partitionKey}:*`);
+    const values: (string | null)[] = await Promise.all(
+      keys.map((key: string) => this.client.get(key)),
+    );
+    return values
+      .map((value: string | null) => JSON.parse(value!))
+      [Symbol.iterator]() as IterableIterator<V>;
+  }
+
+  async entries(): Promise<IterableIterator<[K, V]>> {
+    const keys = await this.client.keys(`${this.partitionKey}:*`);
+    const entries = await Promise.all(
+      keys.map(async (key: string) => {
+        const value = await this.client.get(key);
+        if (value === null) {
+          throw new Error(`Value for key ${key} is null`);
+        }
+        return [
+          key.replace(`${this.partitionKey}:`, "") as K,
+          JSON.parse(value),
+        ];
+      }),
+    );
+    return entries[Symbol.iterator]() as IterableIterator<[K, V]>;
+  }
+}
+
 interface User {
   userId: string;
   chainId: number;
@@ -64,9 +146,7 @@ interface User {
   roleId: string;
 }
 
-export function Users() {
-  const store = new MapStore<string, string>();
-
+export function Users(store: Store<string, string>) {
   async function setAddress(
     userId: string,
     chainId: number,
@@ -110,7 +190,9 @@ export function Users() {
     });
   }
 
-  async function getUsersByChain(chainId: number) {
+  async function getUsersByChain(
+    chainId: number,
+  ): Promise<{ userId: string; chainId: number; address: string }[]> {
     const entries = await store.entries();
     return Array.from(entries)
       .filter(([key, _]) => {
@@ -123,7 +205,9 @@ export function Users() {
       });
   }
 
-  async function getAllAddresses(): Promise<{ userId: string; chainId: number; address: string }[]> {
+  async function getAllAddresses(): Promise<
+    { userId: string; chainId: number; address: string }[]
+  > {
     const entries = await store.entries();
     return Array.from(entries).map(([key, address]: [string, string]) => {
       const [userId, chainId] = decodeKey(key);
@@ -140,3 +224,5 @@ export function Users() {
     deleteAddress,
   };
 }
+
+export type Users = ReturnType<typeof Users>;

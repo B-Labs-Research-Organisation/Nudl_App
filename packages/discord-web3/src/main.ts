@@ -12,17 +12,42 @@ import {
   ActionRowBuilder,
   PermissionsBitField,
 } from "discord.js";
-import { Users } from "./models"; // Import the User function
+import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import { Api } from "./api";
 import { RpcFactory, ChainsById, Chains } from "./utils";
 import { Service as RouterService } from "./router";
+import { createClient } from "redis";
 
 dotenv.config();
 
+// TODO: instruction on how someone could get the current version to run on their computer/Discord server.
+// TODO: allow filtering by role, include roles in exported data
+// TODO: Export to csv file
+// TODO: check ability to query addresses through API
+// TODO: deploy prod and staging
+// TODO: verify ownership of wallet addresses, guild or collabland?
+// TODO: public facing docs, website
+// TODO: docs for people to setup and test on their own
 export function main(): void {
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-  const userStore = Users(); // Initialize the user store
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers, // Add this intent to fetch all members in a guild
+    ],
+  });
+
+  let store: Store<string, string>;
+
+  if (process.env.REDIS_URL) {
+    const redisClient = createClient({ url: process.env.REDIS_URL });
+    redisClient.connect();
+    store = new RedisStore(redisClient, "discord-web3");
+  } else {
+    store = new MapStore();
+  }
+
+  const userStore = Users(store); // Initialize the user store
 
   client.once("ready", async () => {
     console.log("Discord client is ready!");
@@ -78,12 +103,13 @@ export function main(): void {
               })),
             ),
         )
-        .addStringOption((option) =>
-          option
-            .setName("address")
-            .setDescription("The address to remove")
-            .setRequired(true)
-            .setAutocomplete(true), // Enable autocomplete for the address field
+        .addStringOption(
+          (option) =>
+            option
+              .setName("address")
+              .setDescription("The address to remove")
+              .setRequired(true)
+              .setAutocomplete(true), // Enable autocomplete for the address field
         )
         .toJSON(),
       new SlashCommandBuilder()
@@ -91,10 +117,25 @@ export function main(): void {
         .setDescription("Lists all addresses for the user")
         .toJSON(),
       new SlashCommandBuilder()
-      // TODO: make chain optional, to list all chains if not speicifed
-      // TODO: make it possible to list by user
-      // TODO: make option to export to file
-      // TODO: filter by role
+        .setName("admin_list_missing_addresses")
+        .setDescription(
+          "Lists all missing addresses for a given chainId (Admin only)",
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName("chainid")
+            .setDescription("The chain ID")
+            .setRequired(false)
+            .addChoices(
+              ...Chains.map((chain) => ({
+                name: chain.name,
+                value: chain.chainId,
+              })),
+            ),
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        // TODO: filter by role
         .setName("admin_list_addresses")
         .setDescription("Lists all addresses for a given chainId (Admin only)")
         .addIntegerOption((option) =>
@@ -144,8 +185,6 @@ export function main(): void {
     }
   });
 
-  // TODO: add ability to remove address
-  // TODO: admin command to see who does not have an address set for a chain
   client.on("interactionCreate", async (interaction: Interaction) => {
     if (interaction.isCommand()) {
       const { commandName } = interaction;
@@ -207,6 +246,54 @@ export function main(): void {
               ephemeral: true,
             });
           }
+        } else if (commandName === "admin_list_missing_addresses") {
+          if (interaction.isChatInputCommand()) {
+            if (
+              !interaction.memberPermissions?.has(
+                PermissionsBitField.Flags.Administrator,
+              )
+            ) {
+              await interaction.reply({
+                content: "You do not have permission to use this command.",
+                ephemeral: true,
+              });
+              return;
+            }
+
+            const chainId = interaction.options.getInteger("chainid", true);
+            const guild = interaction.guild;
+            if (!guild) {
+              await interaction.reply({
+                content: "This command can only be used within a guild.",
+                ephemeral: true,
+              });
+              return;
+            }
+            const allDiscordUsers = await guild.members.fetch();
+            const allAddresses = await userStore.getUsersByChain(chainId);
+
+            const usersWithAddresses = new Set(
+              allAddresses.map((addr) => addr.userId),
+            );
+            const usersWithoutAddresses = Array.from(
+              allDiscordUsers.values(),
+            ).filter((user) => !usersWithAddresses.has(user.id));
+
+            if (usersWithoutAddresses.length === 0) {
+              await interaction.reply({
+                content: `All users have addresses set for chainId ${chainId}.`,
+                ephemeral: true,
+              });
+            } else {
+              const missingAddressList = usersWithoutAddresses
+                .map((user, index) => `${index + 1}. ${user.user.username}`)
+                .join("\n");
+              await interaction.reply({
+                content: `Users without addresses for chainId ${chainId}:\n${missingAddressList}`,
+                ephemeral: true,
+              });
+            }
+          }
         } else if (commandName === "admin_list_addresses") {
           if (interaction.isChatInputCommand()) {
             if (
@@ -223,18 +310,21 @@ export function main(): void {
 
             const chainId = interaction.options.getInteger("chainid");
             const user = interaction.options.getUser("user");
-            const exportToFile = interaction.options.getBoolean("export") || false;
+            const exportToFile =
+              interaction.options.getBoolean("export") || false;
 
             let allAddresses = await userStore.getAllAddresses();
             if (chainId !== null) {
               allAddresses = await userStore.getUsersByChain(chainId);
             }
 
-            const userAddresses = user ? allAddresses.filter(addr => addr.userId === user.id) : allAddresses;
+            const userAddresses = user
+              ? allAddresses.filter((addr) => addr.userId === user.id)
+              : allAddresses;
 
             if (user && userAddresses.length === 0) {
               await interaction.reply(
-                `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ''}.`,
+                `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ""}.`,
               );
               return;
             }
@@ -249,10 +339,11 @@ export function main(): void {
               };
             });
 
-             
-              // TODO: show role in list 
+            // TODO: show role in list
             const userAddressList = await Promise.all(userPromises);
-            const sortedUserAddressList = userAddressList.sort((a, b) => a.displayName.localeCompare(b.displayName));
+            const sortedUserAddressList = userAddressList.sort((a, b) =>
+              a.displayName.localeCompare(b.displayName),
+            );
             const addressList = sortedUserAddressList
               .map(({ userId, displayName, address, chainId }, index) => {
                 const chain = ChainsById[chainId];
@@ -261,18 +352,21 @@ export function main(): void {
               })
               .join("\n");
             if (exportToFile) {
-              const csvContent = "Index,Display Name,User ID,Address,Chain\n" + addressList;
-              const buffer = Buffer.from(csvContent, 'utf-8');
+              const csvContent =
+                "Index,Display Name,User ID,Address,Chain\n" + addressList;
+              const buffer = Buffer.from(csvContent, "utf-8");
               await interaction.reply({
                 content: `All addresses have been exported as a CSV file.`,
-                files: [{ name: 'all_addresses.csv', attachment: buffer }],
+                files: [{ name: "all_addresses.csv", attachment: buffer }],
                 ephemeral: true,
               });
             } else {
-              await interaction.reply(
-                user ? `Addresses for user ${user.username}:\n${addressList}` : 
-                `Addresses:\n${addressList}`
-              );
+              await interaction.reply({
+                content: user
+                  ? `Addresses for user ${user.username}:\n${addressList}`
+                  : `Addresses:\n${addressList}`,
+                ephemeral: true,
+              });
             }
           }
         }
@@ -319,7 +413,7 @@ export function main(): void {
 
   client.login(process.env.DISCORD_TOKEN as string);
 
-  const api = Api();
+  const api = Api(userStore);
   const apiRpc = RpcFactory(api as any);
   const apiRouter = RouterService(apiRpc);
   // Run the express app
