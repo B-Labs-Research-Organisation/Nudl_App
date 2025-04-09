@@ -85,3 +85,4 @@ export function RpcFactory(
     return method(params.params);
   };
 }
+
