@@ -101,6 +101,7 @@ const fakeEthAddresses = [
   },
 ];
 
+// TODO: Notification for all users who do not have an address set, choose channel by admin, maybe ping users plus add button
 // TODO: When listing addresses, make it look nicer
 // TODO: add role that can manage addresses (other than admin)
 // TODO: Add filter by user for missing address
@@ -426,7 +427,7 @@ export function main(): void {
 
             if (usersWithoutAddresses.length === 0) {
               await interaction.reply({
-                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for chainId ${chainId}.`,
+                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[chainId].name} (${chainId}).`,
                 ephemeral: true,
               });
             } else {
@@ -434,7 +435,7 @@ export function main(): void {
                 .map((user, index) => `${index + 1}. ${user.user.username}`)
                 .join("\n");
               await interaction.reply({
-                content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for chainId ${chainId}:\n${missingAddressList}`,
+                content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for ${ChainsById[chainId].name} (${chainId}):\n${missingAddressList}`,
                 ephemeral: true,
               });
             }
@@ -472,14 +473,17 @@ export function main(): void {
             const exportToFile =
               interaction.options.getBoolean("export") || false;
 
-            let allAddresses = await userStore.getAllAddresses();
-            if (chainId !== null) {
-              allAddresses = await userStore.getUsersByChain(chainId);
-            }
+            // Fetch all members of the server
+            const allDiscordUsers = await guild.members.fetch();
 
-            let userAddresses = user
-              ? allAddresses.filter((addr) => addr.userId === user.id)
-              : allAddresses;
+            // Filter users based on optional filters
+            let filteredUsers = Array.from(allDiscordUsers.values());
+
+            if (user) {
+              filteredUsers = filteredUsers.filter(
+                (member) => member.id === user.id
+              );
+            }
 
             if (role) {
               const roleMembers = guild.roles.cache.get(role.id)?.members;
@@ -487,23 +491,35 @@ export function main(): void {
                 const roleMemberIds = new Set(
                   roleMembers.map((member) => member.id)
                 );
-                userAddresses = userAddresses.filter((addr) =>
-                  roleMemberIds.has(addr.userId)
+                filteredUsers = filteredUsers.filter((member) =>
+                  roleMemberIds.has(member.id)
                 );
               } else {
-                userAddresses = [];
+                filteredUsers = [];
               }
             }
 
             if (channel) {
               await channel.fetch();
               const channelMembers = await channel.members;
-              userAddresses = userAddresses.filter((user) =>
-                channelMembers.has(user.userId)
+              filteredUsers = filteredUsers.filter((member) =>
+                channelMembers.has(member.id)
               );
             }
 
-            if (userAddresses.length === 0) {
+            // Lookup to see if they have addresses set
+            const userAddresses = await Promise.all(
+              filteredUsers.map(async (member) => {
+                const addresses = chainId !== null
+                  ? await userStore.getUsersByChain(chainId)
+                  : await userStore.getAllAddresses();
+                return addresses.filter((addr) => addr.userId === member.id);
+              })
+            );
+
+            const flatUserAddresses = userAddresses.flat();
+
+            if (flatUserAddresses.length === 0) {
               await interaction.reply({
                 content: user
                   ? `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ""}.`
@@ -513,7 +529,8 @@ export function main(): void {
               return;
             }
 
-            const userPromises = userAddresses.map(async (addr) => {
+            // Format the final results
+            const userPromises = flatUserAddresses.map(async (addr) => {
               const discorduser = await client.users.fetch(addr.userId);
               return {
                 userId: addr.userId,
@@ -532,7 +549,7 @@ export function main(): void {
               .map(({ userId, displayName, address, chainId }, index) => {
                 const chain = ChainsById[chainId];
                 const chainName = chain ? chain.name : "Unknown Chain";
-                return `${index + 1},${displayName},${userId},${address},${chainName}`;
+                return `${index+1}. ${displayName} ${chainName}(${chainId}) ${address}`;
               })
               .join("\n");
             if (exportToFile) {
