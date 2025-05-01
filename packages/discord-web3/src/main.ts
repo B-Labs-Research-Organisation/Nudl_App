@@ -11,6 +11,8 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   PermissionsBitField,
+  ChannelType,
+  GuildTextBasedChannel,
 } from "discord.js";
 import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
@@ -21,14 +23,100 @@ import { createClient } from "redis";
 
 dotenv.config();
 
+const fakeEthAddresses = [
+  {
+    chainId: 1,
+    address: "0x15566C4f33a9c279f9d3E1a5bb7589fc5A7158B1",
+    userId: "743854752713932923",
+  },
+  {
+    chainId: 137,
+    address: "0x15566C4f33a9c279f9d3E1a5bb7589fc5A7158B1",
+    userId: "743854752713932923",
+  },
+  {
+    chainId: 42161,
+    address: "0x15566C4f33a9c279f9d3E1a5bb7589fc5A7158B1",
+    userId: "743854752713932923",
+  },
+  {
+    chainId: 10,
+    address: "0x15566C4f33a9c279f9d3E1a5bb7589fc5A7158B1",
+    userId: "743854752713932923",
+  },
+  {
+    chainId: 8453,
+    address: "0x15566C4f33a9c279f9d3E1a5bb7589fc5A7158B1",
+    userId: "743854752713932923",
+  },
+  {
+    chainId: 1,
+    address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
+    userId: "573155442226757653",
+  },
+  {
+    chainId: 137,
+    address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
+    userId: "573155442226757653",
+  },
+  {
+    chainId: 42161,
+    address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
+    userId: "573155442226757653",
+  },
+  {
+    chainId: 10,
+    address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
+    userId: "573155442226757653",
+  },
+  {
+    chainId: 8453,
+    address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
+    userId: "573155442226757653",
+  },
+  {
+    chainId: 1,
+    address: "0x4d13Da5658B5Fd536Cb2bFF5eAc624687de86fb6",
+    userId: "198443430102302720",
+  },
+  {
+    chainId: 137,
+    address: "0x4d13Da5658B5Fd536Cb2bFF5eAc624687de86fb6",
+    userId: "198443430102302720",
+  },
+  {
+    chainId: 42161,
+    address: "0x4d13Da5658B5Fd536Cb2bFF5eAc624687de86fb6",
+    userId: "198443430102302720",
+  },
+  {
+    chainId: 10,
+    address: "0x4d13Da5658B5Fd536Cb2bFF5eAc624687de86fb6",
+    userId: "198443430102302720",
+  },
+  {
+    chainId: 8453,
+    address: "0x4d13Da5658B5Fd536Cb2bFF5eAc624687de86fb6",
+    userId: "198443430102302720",
+  },
+];
+
+// TODO: Notification for all users who do not have an address set, choose channel by admin, maybe ping users plus add button
+// TODO: When listing addresses, make it look nicer
+// TODO: add role that can manage addresses (other than admin)
+// TODO: Add filter by user for missing address
+// TODO: Fix role/channel filtering
+// TODO: export missing adddress users option
+// TODO: Ability to notify users who are missing addresses
 // TODO: instruction on how someone could get the current version to run on their computer/Discord server.
-// TODO: allow filtering by role, include roles in exported data
+// TODO: allow filtering by role, by channel, include roles in exported data for both list address and list missing
 // TODO: Export to csv file
 // TODO: check ability to query addresses through API
 // TODO: deploy prod and staging
 // TODO: verify ownership of wallet addresses, guild or collabland?
 // TODO: public facing docs, website
 // TODO: docs for people to setup and test on their own
+
 export function main(): void {
   const client = new Client({
     intents: [
@@ -53,7 +141,7 @@ export function main(): void {
     console.log("Discord client is ready!");
 
     const rest = new REST({ version: "10" }).setToken(
-      process.env.DISCORD_TOKEN as string,
+      process.env.DISCORD_TOKEN as string
     );
 
     const commands = [
@@ -77,15 +165,15 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              })),
-            ),
+              }))
+            )
         )
         .addStringOption((option) =>
           option
             .setName("address")
             .setDescription("The address to set")
             .setRequired(true)
-            .setAutocomplete(true),
+            .setAutocomplete(true)
         ) // Enable autocomplete for the address field
         .toJSON(),
       new SlashCommandBuilder()
@@ -100,8 +188,8 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              })),
-            ),
+              }))
+            )
         )
         .addStringOption(
           (option) =>
@@ -109,7 +197,7 @@ export function main(): void {
               .setName("address")
               .setDescription("The address to remove")
               .setRequired(true)
-              .setAutocomplete(true), // Enable autocomplete for the address field
+              .setAutocomplete(true) // Enable autocomplete for the address field
         )
         .toJSON(),
       new SlashCommandBuilder()
@@ -119,7 +207,7 @@ export function main(): void {
       new SlashCommandBuilder()
         .setName("admin_list_missing_addresses")
         .setDescription(
-          "Lists all missing addresses for a given chainId (Admin only)",
+          "Lists all missing addresses for a given chainId (Admin only)"
         )
         .addIntegerOption((option) =>
           option
@@ -130,8 +218,20 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              })),
-            ),
+              }))
+            )
+        )
+        .addRoleOption((option) =>
+          option
+            .setName("role")
+            .setDescription("The role to filter missing addresses by")
+            .setRequired(false)
+        )
+        .addChannelOption((option) =>
+          option
+            .setName("channel")
+            .setDescription("The channel to filter missing addresses by")
+            .setRequired(false)
         )
         .toJSON(),
       new SlashCommandBuilder()
@@ -147,26 +247,38 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              })),
-            ),
+              }))
+            )
         )
         .addUserOption((option) =>
           option
             .setName("user")
             .setDescription("The user to search for addresses")
-            .setRequired(false),
+            .setRequired(false)
         )
         .addRoleOption((option) =>
           option
             .setName("role")
             .setDescription("The role to filter addresses by")
-            .setRequired(false),
+            .setRequired(false)
+        )
+        .addChannelOption((option) =>
+          option
+            .setName("channel")
+            .setDescription("The channel to filter addresses by")
+            .setRequired(false)
         )
         .addBooleanOption((option) =>
           option
             .setName("export")
             .setDescription("Whether to export the addresses to a file")
-            .setRequired(false),
+            .setRequired(false)
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_seed_addresses")
+        .setDescription(
+          "Seeds the user store with fake Ethereum addresses (Admin only)"
         )
         .toJSON(),
     ];
@@ -176,7 +288,7 @@ export function main(): void {
 
       await rest.put(
         Routes.applicationCommands(process.env.CLIENT_ID as string),
-        { body: commands },
+        { body: commands }
       );
 
       console.log("Successfully reloaded application (/) commands.");
@@ -213,8 +325,10 @@ export function main(): void {
             const address = interaction.options.getString("address", true);
             const userId = interaction.user.id;
             await userStore.setAddress(userId, chainId, address);
+            const chain = ChainsById[chainId];
+            const chainName = chain ? chain.name : "Unknown Chain";
             await interaction.reply({
-              content: `Address set for chainId ${chainId}: ${address}`,
+              content: `Address set for ${chainName} (${chainId}): ${address}`,
               ephemeral: true,
             });
           }
@@ -222,9 +336,11 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             const chainId = interaction.options.getInteger("chainid", true);
             const userId = interaction.user.id;
+            const chain = ChainsById[chainId];
+            const chainName = chain ? chain.name : "Unknown Chain";
             await userStore.deleteAddress(userId, chainId); // Assuming delete method exists
             await interaction.reply({
-              content: `Address removed for chainId ${chainId}.`,
+              content: `Address removed for ${chainName} (${chainId}).`,
               ephemeral: true,
             });
           }
@@ -238,7 +354,7 @@ export function main(): void {
               .map(({ chainId, address }) => {
                 const chain = ChainsById[chainId];
                 const name = chain ? chain.name : "Unknown Chain";
-                return `${name}: ${address}`;
+                return `${name} (${chainId}): ${address}`;
               })
               .join("\n");
             await interaction.reply({
@@ -250,7 +366,7 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             if (
               !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
+                PermissionsBitField.Flags.Administrator
               )
             ) {
               await interaction.reply({
@@ -261,6 +377,11 @@ export function main(): void {
             }
 
             const chainId = interaction.options.getInteger("chainid", true);
+            const role = interaction.options.getRole("role", false);
+            const channel: GuildTextBasedChannel | null =
+              interaction.options.getChannel("channel", false, [
+                ChannelType.GuildText,
+              ]);
             const guild = interaction.guild;
             if (!guild) {
               await interaction.reply({
@@ -273,15 +394,40 @@ export function main(): void {
             const allAddresses = await userStore.getUsersByChain(chainId);
 
             const usersWithAddresses = new Set(
-              allAddresses.map((addr) => addr.userId),
+              allAddresses.map((addr) => addr.userId)
             );
-            const usersWithoutAddresses = Array.from(
-              allDiscordUsers.values(),
-            ).filter((user) => !usersWithAddresses.has(user.id));
+            let usersWithoutAddresses = Array.from(
+              allDiscordUsers.values()
+            ).filter(
+              (user) => !usersWithAddresses.has(user.id) && !user.user.bot
+            );
+
+            if (role) {
+              await guild.roles.fetch();
+              const roleMembers = guild.roles.cache.get(role.id)?.members;
+              if (roleMembers && roleMembers.size > 0) {
+                const roleMemberIds = new Set(
+                  roleMembers.map((member) => member.id)
+                );
+                usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
+                  roleMemberIds.has(user.id)
+                );
+              } else {
+                usersWithoutAddresses = [];
+              }
+            }
+
+            if (channel) {
+              await channel.fetch();
+              const channelMembers = await channel.members;
+              usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
+                channelMembers.has(user.id)
+              );
+            }
 
             if (usersWithoutAddresses.length === 0) {
               await interaction.reply({
-                content: `All users have addresses set for chainId ${chainId}.`,
+                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[chainId].name} (${chainId}).`,
                 ephemeral: true,
               });
             } else {
@@ -289,7 +435,7 @@ export function main(): void {
                 .map((user, index) => `${index + 1}. ${user.user.username}`)
                 .join("\n");
               await interaction.reply({
-                content: `Users without addresses for chainId ${chainId}:\n${missingAddressList}`,
+                content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for ${ChainsById[chainId].name} (${chainId}):\n${missingAddressList}`,
                 ephemeral: true,
               });
             }
@@ -298,7 +444,7 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             if (
               !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
+                PermissionsBitField.Flags.Administrator
               )
             ) {
               await interaction.reply({
@@ -308,28 +454,83 @@ export function main(): void {
               return;
             }
 
-            const chainId = interaction.options.getInteger("chainid");
-            const user = interaction.options.getUser("user");
-            const exportToFile =
-              interaction.options.getBoolean("export") || false;
-
-            let allAddresses = await userStore.getAllAddresses();
-            if (chainId !== null) {
-              allAddresses = await userStore.getUsersByChain(chainId);
-            }
-
-            const userAddresses = user
-              ? allAddresses.filter((addr) => addr.userId === user.id)
-              : allAddresses;
-
-            if (user && userAddresses.length === 0) {
-              await interaction.reply(
-                `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ""}.`,
-              );
+            const guild = interaction.guild;
+            if (!guild) {
+              await interaction.reply({
+                content: "This command can only be used within a guild.",
+                ephemeral: true,
+              });
               return;
             }
 
-            const userPromises = userAddresses.map(async (addr) => {
+            const chainId = interaction.options.getInteger("chainid");
+            const user = interaction.options.getUser("user");
+            const role = interaction.options.getRole("role", false);
+            const channel: GuildTextBasedChannel | null =
+              interaction.options.getChannel("channel", false, [
+                ChannelType.GuildText,
+              ]);
+            const exportToFile =
+              interaction.options.getBoolean("export") || false;
+
+            // Fetch all members of the server
+            const allDiscordUsers = await guild.members.fetch();
+
+            // Filter users based on optional filters
+            let filteredUsers = Array.from(allDiscordUsers.values());
+
+            if (user) {
+              filteredUsers = filteredUsers.filter(
+                (member) => member.id === user.id
+              );
+            }
+
+            if (role) {
+              const roleMembers = guild.roles.cache.get(role.id)?.members;
+              if (roleMembers) {
+                const roleMemberIds = new Set(
+                  roleMembers.map((member) => member.id)
+                );
+                filteredUsers = filteredUsers.filter((member) =>
+                  roleMemberIds.has(member.id)
+                );
+              } else {
+                filteredUsers = [];
+              }
+            }
+
+            if (channel) {
+              await channel.fetch();
+              const channelMembers = await channel.members;
+              filteredUsers = filteredUsers.filter((member) =>
+                channelMembers.has(member.id)
+              );
+            }
+
+            // Lookup to see if they have addresses set
+            const userAddresses = await Promise.all(
+              filteredUsers.map(async (member) => {
+                const addresses = chainId !== null
+                  ? await userStore.getUsersByChain(chainId)
+                  : await userStore.getAllAddresses();
+                return addresses.filter((addr) => addr.userId === member.id);
+              })
+            );
+
+            const flatUserAddresses = userAddresses.flat();
+
+            if (flatUserAddresses.length === 0) {
+              await interaction.reply({
+                content: user
+                  ? `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ""}.`
+                  : `No users with addresses found${chainId ? ` on chainId ${chainId}` : ""}.`,
+                ephemeral: true,
+              });
+              return;
+            }
+
+            // Format the final results
+            const userPromises = flatUserAddresses.map(async (addr) => {
               const discorduser = await client.users.fetch(addr.userId);
               return {
                 userId: addr.userId,
@@ -342,13 +543,13 @@ export function main(): void {
             // TODO: show role in list
             const userAddressList = await Promise.all(userPromises);
             const sortedUserAddressList = userAddressList.sort((a, b) =>
-              a.displayName.localeCompare(b.displayName),
+              a.displayName.localeCompare(b.displayName)
             );
             const addressList = sortedUserAddressList
               .map(({ userId, displayName, address, chainId }, index) => {
                 const chain = ChainsById[chainId];
                 const chainName = chain ? chain.name : "Unknown Chain";
-                return `${index + 1},${displayName},${userId},${address},${chainName}`;
+                return `${index+1}. ${displayName} ${chainName}(${chainId}) ${address}`;
               })
               .join("\n");
             if (exportToFile) {
@@ -368,6 +569,29 @@ export function main(): void {
                 ephemeral: true,
               });
             }
+          }
+        } else if (commandName === "admin_seed_addresses") {
+          if (interaction.isChatInputCommand()) {
+            if (
+              !interaction.memberPermissions?.has(
+                PermissionsBitField.Flags.Administrator
+              )
+            ) {
+              await interaction.reply({
+                content: "You do not have permission to use this command.",
+                ephemeral: true,
+              });
+              return;
+            }
+
+            for (const { userId, chainId, address } of fakeEthAddresses) {
+              await userStore.setAddress(userId, chainId, address);
+            }
+
+            await interaction.reply({
+              content: "Fake Ethereum addresses have been seeded successfully.",
+              ephemeral: true,
+            });
           }
         }
       } catch (error) {
