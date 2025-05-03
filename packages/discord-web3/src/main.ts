@@ -13,6 +13,8 @@ import {
   PermissionsBitField,
   ChannelType,
   GuildTextBasedChannel,
+  ButtonBuilder,
+  ButtonStyle
 } from "discord.js";
 import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
@@ -102,7 +104,6 @@ const fakeEthAddresses = [
 ];
 
 // TODO: add button for admin once they list missing addresses to make announcement
-// TODO: Notification for all users who do not have an address set, choose channel by admin, maybe ping users plus add button
 // TODO: customize notification message?
 // TODO: When listing addresses, make it look nicer
 // TODO: add role that can manage addresses (other than admin)
@@ -545,8 +546,15 @@ export function main(): void {
                 .map((user) => `<@${user.id}>`)
                 .join(" ");
               const chainName = ChainsById[chainId]?.name || "Unknown Chain";
+              const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`addAddress_${chainId}`)
+                  .setLabel("Add Address")
+                  .setStyle(ButtonStyle.Primary)
+              );
               await interaction.reply({
                 content: `Attention ${mentions}, please add your address for ${chainName} (${chainId}) using the /set_address command.`,
+                components: [button],
                 allowedMentions: {
                   users: usersWithoutAddresses.map((user) => user.id),
                 },
@@ -742,9 +750,53 @@ export function main(): void {
         await interaction.respond(choices);
       }
     } else if (interaction.isModalSubmit()) {
-      if (interaction.customId === "userInputModal") {
-        const userInput = interaction.fields.getTextInputValue("userInput");
-        await interaction.reply(`You entered: ${userInput}`);
+      try {
+        if (interaction.customId === "userInputModal") {
+          const userInput = interaction.fields.getTextInputValue("userInput");
+          await interaction.reply(`You entered: ${userInput}`);
+        } else if (interaction.customId.startsWith("addAddress_")) {
+          const chainId = parseInt(interaction.customId.split("_")[1], 10);
+          const address = interaction.fields.getTextInputValue("addressInput");
+          const userId = interaction.user.id;
+          await userStore.setAddress(userId, chainId, address);
+          const chain = ChainsById[chainId];
+          const chainName = chain ? chain.name : "Unknown Chain";
+          await interaction.reply({
+            content: `Address set for ${chainName} (${chainId}): ${address}`,
+            ephemeral: true,
+          });
+        }
+      } catch (error) {
+        console.error("Error handling modal submit:", error);
+        if (error instanceof Error) {
+          await interaction.reply({
+            content: error.message,
+            ephemeral: true,
+          });
+        } else {
+          await interaction.reply({
+            content: "An unknown error occurred.",
+            ephemeral: true,
+          });
+        }
+      }
+    } else if (interaction.isButton()) {
+      if (interaction.customId.startsWith("addAddress_")) {
+        const chainId = parseInt(interaction.customId.split("_")[1], 10);
+        const modal = new ModalBuilder()
+          .setCustomId(`addAddress_${chainId}`)
+          .setTitle("Add Address");
+
+        const input = new TextInputBuilder()
+          .setCustomId("addressInput")
+          .setLabel("Enter your address")
+          .setStyle(TextInputStyle.Short);
+
+        const actionRow =
+          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
       }
     }
   });
