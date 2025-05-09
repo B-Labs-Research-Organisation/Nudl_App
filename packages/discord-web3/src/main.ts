@@ -1,3 +1,22 @@
+// TODO: add a button to notify missing users when listing missing addresses
+// TODO: Make addresses defined per guild
+// TODO: add button for admin once they list missing addresses to make announcement
+// TODO: customize notification message?
+// TODO: When listing addresses, make it look nicer
+// TODO: add role that can manage addresses (other than admin)
+// TODO: Add filter by user for missing address
+// TODO: Fix role/channel filtering
+// TODO: export missing adddress users option
+// TODO: Ability to notify users who are missing addresses
+// TODO: instruction on how someone could get the current version to run on their computer/Discord server.
+// TODO: allow filtering by role, by channel, include roles in exported data for both list address and list missing
+// TODO: Export to csv file
+// TODO: check ability to query addresses through API
+// TODO: deploy prod and staging
+// TODO: verify ownership of wallet addresses, guild or collabland?
+// TODO: public facing docs, website
+// TODO: docs for people to setup and test on their own
+
 import dotenv from "dotenv";
 import {
   Client,
@@ -14,7 +33,8 @@ import {
   ChannelType,
   GuildTextBasedChannel,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  TextChannel,
 } from "discord.js";
 import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
@@ -22,6 +42,7 @@ import { Api } from "./api";
 import { RpcFactory, ChainsById, Chains } from "./utils";
 import { Service as RouterService } from "./router";
 import { createClient } from "redis";
+import assert from "assert";
 
 dotenv.config();
 
@@ -103,23 +124,6 @@ const fakeEthAddresses = [
   },
 ];
 
-// TODO: add button for admin once they list missing addresses to make announcement
-// TODO: customize notification message?
-// TODO: When listing addresses, make it look nicer
-// TODO: add role that can manage addresses (other than admin)
-// TODO: Add filter by user for missing address
-// TODO: Fix role/channel filtering
-// TODO: export missing adddress users option
-// TODO: Ability to notify users who are missing addresses
-// TODO: instruction on how someone could get the current version to run on their computer/Discord server.
-// TODO: allow filtering by role, by channel, include roles in exported data for both list address and list missing
-// TODO: Export to csv file
-// TODO: check ability to query addresses through API
-// TODO: deploy prod and staging
-// TODO: verify ownership of wallet addresses, guild or collabland?
-// TODO: public facing docs, website
-// TODO: docs for people to setup and test on their own
-
 export function main(): void {
   const client = new Client({
     intents: [
@@ -158,11 +162,11 @@ export function main(): void {
         .toJSON(),
       new SlashCommandBuilder()
         .setName("set_address")
-        .setDescription("Sets the address for a specific chainId")
+        .setDescription("Sets the address for a specific network")
         .addIntegerOption((option) =>
           option
-            .setName("chainid")
-            .setDescription("The chain ID")
+            .setName("network")
+            .setDescription("The network")
             .setRequired(true)
             .addChoices(
               ...Chains.map((chain) => ({
@@ -181,11 +185,11 @@ export function main(): void {
         .toJSON(),
       new SlashCommandBuilder()
         .setName("remove_address")
-        .setDescription("Removes the address for a specific chainId")
+        .setDescription("Removes the address for a specific network")
         .addIntegerOption((option) =>
           option
-            .setName("chainid")
-            .setDescription("The chain ID")
+            .setName("network")
+            .setDescription("The network")
             .setRequired(true)
             .addChoices(
               ...Chains.map((chain) => ({
@@ -210,12 +214,12 @@ export function main(): void {
       new SlashCommandBuilder()
         .setName("admin_list_missing_addresses")
         .setDescription(
-          "Lists all missing addresses for a given chainId (Admin only)"
+          "Lists all missing addresses for a given network (Admin only)"
         )
         .addIntegerOption((option) =>
           option
-            .setName("chainid")
-            .setDescription("The chain ID")
+            .setName("network")
+            .setDescription("The network")
             .setRequired(false)
             .addChoices(
               ...Chains.map((chain) => ({
@@ -240,11 +244,11 @@ export function main(): void {
       new SlashCommandBuilder()
         // TODO: filter by role
         .setName("admin_list_addresses")
-        .setDescription("Lists all addresses for a given chainId (Admin only)")
+        .setDescription("Lists all addresses for a given network (Admin only)")
         .addIntegerOption((option) =>
           option
-            .setName("chainid")
-            .setDescription("The chain ID")
+            .setName("network")
+            .setDescription("The network")
             .setRequired(false)
             .addChoices(
               ...Chains.map((chain) => ({
@@ -287,12 +291,12 @@ export function main(): void {
       new SlashCommandBuilder()
         .setName("admin_notify_missing_addresses")
         .setDescription(
-          "Notifies users missing addresses for a given chainId (Admin only)"
+          "Notifies users missing addresses for a given network (Admin only)"
         )
         .addIntegerOption((option) =>
           option
-            .setName("chainid")
-            .setDescription("The chain ID")
+            .setName("network")
+            .setDescription("The network")
             .setRequired(true)
             .addChoices(
               ...Chains.map((chain) => ({
@@ -354,26 +358,26 @@ export function main(): void {
           await interaction.showModal(modal);
         } else if (commandName === "set_address") {
           if (interaction.isChatInputCommand()) {
-            const chainId = interaction.options.getInteger("chainid", true);
+            const network = interaction.options.getInteger("network", true);
             const address = interaction.options.getString("address", true);
             const userId = interaction.user.id;
-            await userStore.setAddress(userId, chainId, address);
-            const chain = ChainsById[chainId];
+            await userStore.setAddress(userId, network, address);
+            const chain = ChainsById[network];
             const chainName = chain ? chain.name : "Unknown Chain";
             await interaction.reply({
-              content: `Address set for ${chainName} (${chainId}): ${address}`,
+              content: `Address set for ${chainName} (${network}): ${address}`,
               ephemeral: true,
             });
           }
         } else if (commandName === "remove_address") {
           if (interaction.isChatInputCommand()) {
-            const chainId = interaction.options.getInteger("chainid", true);
+            const network = interaction.options.getInteger("network", true);
             const userId = interaction.user.id;
-            const chain = ChainsById[chainId];
+            const chain = ChainsById[network];
             const chainName = chain ? chain.name : "Unknown Chain";
-            await userStore.deleteAddress(userId, chainId); // Assuming delete method exists
+            await userStore.deleteAddress(userId, network); // Assuming delete method exists
             await interaction.reply({
-              content: `Address removed for ${chainName} (${chainId}).`,
+              content: `Address removed for ${chainName} (${network}).`,
               ephemeral: true,
             });
           }
@@ -381,7 +385,7 @@ export function main(): void {
           const userId = interaction.user.id;
           const userAddresses = await userStore.getUser(userId);
           if (userAddresses.length === 0) {
-            await interaction.reply("No addresses set for any chains.");
+            await interaction.reply("No addresses set for any networks.");
           } else {
             const addressList = userAddresses
               .map(({ chainId, address }) => {
@@ -391,7 +395,7 @@ export function main(): void {
               })
               .join("\n");
             await interaction.reply({
-              content: `Addresses set for chains:\n${addressList}`,
+              content: `Addresses set for networks:\n${addressList}`,
               ephemeral: true,
             });
           }
@@ -409,7 +413,7 @@ export function main(): void {
               return;
             }
 
-            const chainId = interaction.options.getInteger("chainid", true);
+            const network = interaction.options.getInteger("network", true);
             const role = interaction.options.getRole("role", false);
             const channel: GuildTextBasedChannel | null =
               interaction.options.getChannel("channel", false, [
@@ -424,7 +428,7 @@ export function main(): void {
               return;
             }
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(chainId);
+            const allAddresses = await userStore.getUsersByChain(network);
 
             const usersWithAddresses = new Set(
               allAddresses.map((addr) => addr.userId)
@@ -460,15 +464,33 @@ export function main(): void {
 
             if (usersWithoutAddresses.length === 0) {
               await interaction.reply({
-                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[chainId].name} (${chainId}).`,
+                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[network].name} (${network}).`,
                 ephemeral: true,
               });
             } else {
               const missingAddressList = usersWithoutAddresses
-                .map((user, index) => `${index + 1}. ${user.user.username}`)
+                .map(
+                  (user, index) =>
+                    `${index + 1}. ${user.displayName}(${user.user.username})`
+                )
                 .join("\n");
+              const customIdParts = [
+                `notifyMissing`,
+                `chain:${network}`,
+                role ? `role:${role.id}` : `role:none`,
+                channel ? `channel:${channel.id}` : `channel:none`,
+              ];
+              const customId = customIdParts.join("_");
+              const notifyButton =
+                new ActionRowBuilder<ButtonBuilder>().addComponents(
+                  new ButtonBuilder()
+                    .setCustomId(customId)
+                    .setLabel("Announce to Missing Users")
+                    .setStyle(ButtonStyle.Secondary)
+                );
               await interaction.reply({
-                content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for ${ChainsById[chainId].name} (${chainId}):\n${missingAddressList}`,
+                content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for ${ChainsById[network].name} (${network}):\n${missingAddressList}`,
+                components: [notifyButton],
                 ephemeral: true,
               });
             }
@@ -487,7 +509,7 @@ export function main(): void {
               return;
             }
 
-            const chainId = interaction.options.getInteger("chainid", true);
+            const network = interaction.options.getInteger("network", true);
             const role = interaction.options.getRole("role", false);
             const channel: GuildTextBasedChannel | null =
               interaction.options.getChannel("channel", false, [
@@ -502,7 +524,7 @@ export function main(): void {
               return;
             }
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(chainId);
+            const allAddresses = await userStore.getUsersByChain(network);
 
             const usersWithAddresses = new Set(
               allAddresses.map((addr) => addr.userId)
@@ -538,22 +560,23 @@ export function main(): void {
 
             if (usersWithoutAddresses.length === 0) {
               await interaction.reply({
-                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[chainId].name} (${chainId}).`,
+                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[network].name} (${network}).`,
                 ephemeral: true,
               });
             } else {
               const mentions = usersWithoutAddresses
                 .map((user) => `<@${user.id}>`)
                 .join(" ");
-              const chainName = ChainsById[chainId]?.name || "Unknown Chain";
-              const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder()
-                  .setCustomId(`addAddress_${chainId}`)
-                  .setLabel("Add Address")
-                  .setStyle(ButtonStyle.Primary)
-              );
+              const chainName = ChainsById[network]?.name || "Unknown Chain";
+              const button =
+                new ActionRowBuilder<ButtonBuilder>().addComponents(
+                  new ButtonBuilder()
+                    .setCustomId(`addAddress_${network}`)
+                    .setLabel(`Add Address for ${chainName} (${network})`)
+                    .setStyle(ButtonStyle.Primary)
+                );
               await interaction.reply({
-                content: `Attention ${mentions}, please add your address for ${chainName} (${chainId}) using the /set_address command.`,
+                content: `Attention ${mentions}, please add your address for ${chainName} (${network})`,
                 components: [button],
                 allowedMentions: {
                   users: usersWithoutAddresses.map((user) => user.id),
@@ -584,7 +607,7 @@ export function main(): void {
               return;
             }
 
-            const chainId = interaction.options.getInteger("chainid");
+            const network = interaction.options.getInteger("network");
             const user = interaction.options.getUser("user");
             const role = interaction.options.getRole("role", false);
             const channel: GuildTextBasedChannel | null =
@@ -632,8 +655,8 @@ export function main(): void {
             const userAddresses = await Promise.all(
               filteredUsers.map(async (member) => {
                 const addresses =
-                  chainId !== null
-                    ? await userStore.getUsersByChain(chainId)
+                  network !== null
+                    ? await userStore.getUsersByChain(network)
                     : await userStore.getAllAddresses();
                 return addresses.filter((addr) => addr.userId === member.id);
               })
@@ -644,8 +667,8 @@ export function main(): void {
             if (flatUserAddresses.length === 0) {
               await interaction.reply({
                 content: user
-                  ? `No addresses found for user ${user.username}${chainId ? ` on chainId ${chainId}` : ""}.`
-                  : `No users with addresses found${chainId ? ` on chainId ${chainId}` : ""}.`,
+                  ? `No addresses found for user ${user.username}${network ? ` on network ${network}` : ""}.`
+                  : `No users with addresses found${network ? ` on network ${network}` : ""}.`,
                 ephemeral: true,
               });
               return;
@@ -656,7 +679,8 @@ export function main(): void {
               const discorduser = await client.users.fetch(addr.userId);
               return {
                 userId: addr.userId,
-                displayName: discorduser.username,
+                displayName: discorduser.displayName,
+                username: discorduser.username,
                 address: addr.address,
                 chainId: addr.chainId,
               };
@@ -668,11 +692,16 @@ export function main(): void {
               a.displayName.localeCompare(b.displayName)
             );
             const addressList = sortedUserAddressList
-              .map(({ userId, displayName, address, chainId }, index) => {
-                const chain = ChainsById[chainId];
-                const chainName = chain ? chain.name : "Unknown Chain";
-                return `${index + 1}. ${displayName} ${chainName}(${chainId}) ${address}`;
-              })
+              .map(
+                (
+                  { userId, displayName, address, chainId, username },
+                  index
+                ) => {
+                  const chain = ChainsById[chainId];
+                  const chainName = chain ? chain.name : "Unknown Chain";
+                  return `${index + 1}. ${displayName}(${username}) ${chainName}(${chainId}) ${address}`;
+                }
+              )
               .join("\n");
             if (exportToFile) {
               const csvContent =
@@ -755,14 +784,14 @@ export function main(): void {
           const userInput = interaction.fields.getTextInputValue("userInput");
           await interaction.reply(`You entered: ${userInput}`);
         } else if (interaction.customId.startsWith("addAddress_")) {
-          const chainId = parseInt(interaction.customId.split("_")[1], 10);
+          const network = parseInt(interaction.customId.split("_")[1], 10);
           const address = interaction.fields.getTextInputValue("addressInput");
           const userId = interaction.user.id;
-          await userStore.setAddress(userId, chainId, address);
-          const chain = ChainsById[chainId];
+          await userStore.setAddress(userId, network, address);
+          const chain = ChainsById[network];
           const chainName = chain ? chain.name : "Unknown Chain";
           await interaction.reply({
-            content: `Address set for ${chainName} (${chainId}): ${address}`,
+            content: `Address set for ${chainName} (${network}): ${address}`,
             ephemeral: true,
           });
         }
@@ -782,10 +811,12 @@ export function main(): void {
       }
     } else if (interaction.isButton()) {
       if (interaction.customId.startsWith("addAddress_")) {
-        const chainId = parseInt(interaction.customId.split("_")[1], 10);
+        const network = parseInt(interaction.customId.split("_")[1], 10);
+        const chain = ChainsById[network];
+        const chainName = chain ? chain.name : "Unknown Chain";
         const modal = new ModalBuilder()
-          .setCustomId(`addAddress_${chainId}`)
-          .setTitle("Add Address");
+          .setCustomId(`addAddress_${network}`)
+          .setTitle(`Add Address for ${chainName} (${network})`);
 
         const input = new TextInputBuilder()
           .setCustomId("addressInput")
@@ -797,6 +828,86 @@ export function main(): void {
         modal.addComponents(actionRow);
 
         await interaction.showModal(modal);
+      } else if (interaction.customId.startsWith("notifyMissing_")) {
+        const [_, networkPart, rolePart, channelPart] =
+          interaction.customId.split("_");
+        const network = Number(networkPart.split("chain:")[1]);
+        const roleId =
+          rolePart !== "role:none" ? rolePart.split("role:")[1] : null;
+        const channelId =
+          channelPart !== "channel:none"
+            ? channelPart.split("channel:")[1]
+            : null;
+        console.log({id:interaction.customId,network,roleId,channelId,networkPart,rolePart,channelPart})
+        const guild = interaction.guild;
+        if (!guild) {
+          await interaction.reply({
+            content: "This command can only be used within a guild.",
+            ephemeral: true,
+          });
+          return;
+        }
+        const allDiscordUsers = await guild.members.fetch();
+        const allAddresses = await userStore.getUsersByChain(network);
+
+        const usersWithAddresses = new Set(
+          allAddresses.map((addr) => addr.userId)
+        );
+        let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
+          (user) => !usersWithAddresses.has(user.id) && !user.user.bot
+        );
+
+        if (roleId) {
+          await guild.roles.fetch();
+          const roleMembers = guild.roles.cache.get(roleId)?.members;
+          if (roleMembers && roleMembers.size > 0) {
+            const roleMemberIds = new Set(
+              roleMembers.map((member) => member.id)
+            );
+            usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
+              roleMemberIds.has(user.id)
+            );
+          } else {
+            usersWithoutAddresses = [];
+          }
+        }
+
+        if (channelId) {
+          const channel = await guild.channels.fetch(channelId);
+          assert(
+            channel !== null && channel.isTextBased(),
+            "Must be a text channel"
+          );
+          const channelMembers = (channel as TextChannel).members;
+          usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
+            channelMembers.has(user.id)
+          );
+        }
+
+        if (usersWithoutAddresses.length === 0) {
+          await interaction.reply({
+            content: `All users have addresses set for ${ChainsById[network].name} (${network}).`,
+            ephemeral: true,
+          });
+        } else {
+          const mentions = usersWithoutAddresses
+            .map((user) => `<@${user.id}>`)
+            .join(" ");
+          const chainName = ChainsById[network]?.name || "Unknown Chain";
+          const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`addAddress_${network}`)
+              .setLabel(`Add Address for ${chainName} (${network})`)
+              .setStyle(ButtonStyle.Primary)
+          );
+          await interaction.reply({
+            content: `Attention ${mentions}, please add your address for ${chainName} (${network})`,
+            components: [button],
+            allowedMentions: {
+              users: usersWithoutAddresses.map((user) => user.id),
+            },
+          });
+        }
       }
     }
   });
