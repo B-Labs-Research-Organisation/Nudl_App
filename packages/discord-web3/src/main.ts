@@ -1,13 +1,9 @@
-// TODO: add a button to notify missing users when listing missing addresses
 // TODO: Make addresses defined per guild
-// TODO: add button for admin once they list missing addresses to make announcement
 // TODO: customize notification message?
 // TODO: When listing addresses, make it look nicer
 // TODO: add role that can manage addresses (other than admin)
 // TODO: Add filter by user for missing address
-// TODO: Fix role/channel filtering
 // TODO: export missing adddress users option
-// TODO: Ability to notify users who are missing addresses
 // TODO: instruction on how someone could get the current version to run on their computer/Discord server.
 // TODO: allow filtering by role, by channel, include roles in exported data for both list address and list missing
 // TODO: Export to csv file
@@ -361,7 +357,8 @@ export function main(): void {
             const network = interaction.options.getInteger("network", true);
             const address = interaction.options.getString("address", true);
             const userId = interaction.user.id;
-            await userStore.setAddress(userId, network, address);
+            const guildId = interaction.guildId!;
+            await userStore.setAddress(userId, guildId, network, address);
             const chain = ChainsById[network];
             const chainName = chain ? chain.name : "Unknown Chain";
             await interaction.reply({
@@ -373,9 +370,10 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             const network = interaction.options.getInteger("network", true);
             const userId = interaction.user.id;
+            const guildId = interaction.guildId!;
             const chain = ChainsById[network];
             const chainName = chain ? chain.name : "Unknown Chain";
-            await userStore.deleteAddress(userId, network); // Assuming delete method exists
+            await userStore.deleteAddress(userId, guildId, network); // Assuming delete method exists
             await interaction.reply({
               content: `Address removed for ${chainName} (${network}).`,
               ephemeral: true,
@@ -383,7 +381,8 @@ export function main(): void {
           }
         } else if (commandName === "list_addresses") {
           const userId = interaction.user.id;
-          const userAddresses = await userStore.getUser(userId);
+          const guildId = interaction.guildId!;
+          const userAddresses = await userStore.getUser(userId, guildId);
           if (userAddresses.length === 0) {
             await interaction.reply("No addresses set for any networks.");
           } else {
@@ -427,8 +426,9 @@ export function main(): void {
               });
               return;
             }
+            const guildId = guild.id;
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(network);
+            const allAddresses = await userStore.getUsersByChain(network, guildId);
 
             const usersWithAddresses = new Set(
               allAddresses.map((addr) => addr.userId)
@@ -523,8 +523,9 @@ export function main(): void {
               });
               return;
             }
+            const guildId = guild.id;
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(network);
+            const allAddresses = await userStore.getUsersByChain(network, guildId);
 
             const usersWithAddresses = new Set(
               allAddresses.map((addr) => addr.userId)
@@ -652,12 +653,13 @@ export function main(): void {
             }
 
             // Lookup to see if they have addresses set
+            const guildId = guild.id;
             const userAddresses = await Promise.all(
               filteredUsers.map(async (member) => {
                 const addresses =
                   network !== null
-                    ? await userStore.getUsersByChain(network)
-                    : await userStore.getAllAddresses();
+                    ? await userStore.getUsersByChain(network, guildId)
+                    : await userStore.getAllAddresses(guildId);
                 return addresses.filter((addr) => addr.userId === member.id);
               })
             );
@@ -735,8 +737,9 @@ export function main(): void {
               return;
             }
 
+            const guildId = interaction.guildId!;
             for (const { userId, chainId, address } of fakeEthAddresses) {
-              await userStore.setAddress(userId, chainId, address);
+              await userStore.setAddress(userId, guildId, chainId, address);
             }
 
             await interaction.reply({
@@ -763,7 +766,8 @@ export function main(): void {
       const focusedOption = interaction.options.getFocused(true);
       if (focusedOption.name === "address") {
         const userId = interaction.user.id;
-        const userAddresses = await userStore.getUser(userId);
+        const guildId = interaction.guildId!;
+        const userAddresses = await userStore.getUser(userId, guildId);
         // TODO: need to filter out other addresses if user input doesnt match
         const userInput = interaction.options.getString("filter", false) || "";
         const choices = userAddresses
@@ -787,7 +791,8 @@ export function main(): void {
           const network = parseInt(interaction.customId.split("_")[1], 10);
           const address = interaction.fields.getTextInputValue("addressInput");
           const userId = interaction.user.id;
-          await userStore.setAddress(userId, network, address);
+          const guildId = interaction.guildId!;
+          await userStore.setAddress(userId, guildId, network, address);
           const chain = ChainsById[network];
           const chainName = chain ? chain.name : "Unknown Chain";
           await interaction.reply({
@@ -838,7 +843,6 @@ export function main(): void {
           channelPart !== "channel:none"
             ? channelPart.split("channel:")[1]
             : null;
-        console.log({id:interaction.customId,network,roleId,channelId,networkPart,rolePart,channelPart})
         const guild = interaction.guild;
         if (!guild) {
           await interaction.reply({
@@ -847,8 +851,9 @@ export function main(): void {
           });
           return;
         }
+        const guildId = guild.id;
         const allDiscordUsers = await guild.members.fetch();
-        const allAddresses = await userStore.getUsersByChain(network);
+        const allAddresses = await userStore.getUsersByChain(network, guildId);
 
         const usersWithAddresses = new Set(
           allAddresses.map((addr) => addr.userId)
