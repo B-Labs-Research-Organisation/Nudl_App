@@ -141,6 +141,7 @@ export class RedisStore<K, V> implements Store<K, V> {
 
 interface User {
   userId: string;
+  guildId: string;
   chainId: number;
   address: string;
   roleId: string;
@@ -149,70 +150,80 @@ interface User {
 export function Users(store: Store<string, string>) {
   async function setAddress(
     userId: string,
+    guildId: string,
     chainId: number,
     address: string,
   ): Promise<void> {
     if (!isAddress(address)) {
       throw new Error("Invalid Address");
     }
-    const key = encodeKey([userId, chainId]);
+    const key = encodeKey([userId, guildId, chainId]);
     await store.set(key, address);
   }
 
   async function getAddress(
     userId: string,
+    guildId: string,
     chainId: number,
   ): Promise<string | undefined> {
-    const key = encodeKey([userId, chainId]);
+    const key = encodeKey([userId, guildId, chainId]);
     return await store.get(key);
   }
 
   async function deleteAddress(
     userId: string,
+    guildId: string,
     chainId: number,
   ): Promise<boolean> {
-    const key = encodeKey([userId, chainId]);
+    const key = encodeKey([userId, guildId, chainId]);
     return await store.delete(key);
   }
 
   async function getUser(
     userId: string,
+    guildId: string,
   ): Promise<{ chainId: number; address: string }[]> {
     const entries = await store.entries();
     const userEntries = Array.from(entries).filter(([key, _]) => {
-      const [storedUserId] = decodeKey(key);
-      return storedUserId === userId;
+      const [storedUserId, storedGuildId] = decodeKey(key);
+      return storedUserId === userId && storedGuildId === guildId;
     });
 
     return userEntries.map(([key, address]) => {
-      const [, chainId] = decodeKey(key);
+      const [, , chainId] = decodeKey(key);
       return { chainId: Number(chainId), address };
     });
   }
 
   async function getUsersByChain(
     chainId: number,
+    guildId: string,
   ): Promise<{ userId: string; chainId: number; address: string }[]> {
     const entries = await store.entries();
     return Array.from(entries)
       .filter(([key, _]) => {
-        const [, storedChainId] = decodeKey(key);
-        return Number(storedChainId) === chainId;
+        const [, storedGuildId, storedChainId] = decodeKey(key);
+        return Number(storedChainId) === chainId && storedGuildId === guildId;
       })
       .map(([key, address]) => {
-        const [userId, storedChainId] = decodeKey(key);
+        const [userId, , storedChainId] = decodeKey(key);
         return { userId, chainId: Number(storedChainId), address };
       });
   }
 
-  async function getAllAddresses(): Promise<
+  async function getAllAddresses(guildId: string): Promise<
     { userId: string; chainId: number; address: string }[]
   > {
     const entries = await store.entries();
-    return Array.from(entries).map(([key, address]: [string, string]) => {
-      const [userId, chainId] = decodeKey(key);
-      return { userId, chainId: Number(chainId), address };
-    });
+    return Array.from(entries)
+      .filter(([key, _]) => {
+        const [, storedGuildId] = decodeKey(key);
+        return storedGuildId === guildId;
+      })
+      .map(([key, address]: [string, string]) => {
+        const [userId, , chainId] = decodeKey(key);
+        return { userId, chainId: Number(chainId), address };
+      });
   }
 
   return {
