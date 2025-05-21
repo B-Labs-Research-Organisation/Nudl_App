@@ -1,4 +1,4 @@
-// TODO: Make addresses defined per guild
+// TODO: Generate safe transactions
 // TODO: customize notification message?
 // TODO: When listing addresses, make it look nicer
 // TODO: add role that can manage addresses (other than admin)
@@ -13,6 +13,11 @@
 // TODO: public facing docs, website
 // TODO: docs for people to setup and test on their own
 
+// DONE: Import csv to generate safe tx
+// DONE: Ability to send amounts per user
+// DONE: Make addresses defined per guild
+// DONE: improved missing address notification
+// DONE: Remove redundant text for add address notification: https://discord.com/channels/1035162791302139935/1311408790083469343/1369228478120988733
 import dotenv from "dotenv";
 import {
   Client,
@@ -32,13 +37,15 @@ import {
   ButtonStyle,
   TextChannel,
 } from "discord.js";
+import * as viem from "viem";
 import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import { Api } from "./api";
-import { RpcFactory, ChainsById, Chains } from "./utils";
+import { RpcFactory, ChainsById, Chains, getId, getViemChain } from "./utils";
 import { Service as RouterService } from "./router";
 import { createClient } from "redis";
 import assert from "assert";
+import ERC20_ABI from "./erc20.abi";
 
 dotenv.config();
 
@@ -119,6 +126,13 @@ const fakeEthAddresses = [
     userId: "198443430102302720",
   },
 ];
+
+const safeGenerations:Record<string,{
+  id: string,
+  chainId:number,
+  safeAddress:string,
+  tokenAddress:string,
+}> = {}
 
 export function main(): void {
   const client = new Client({
@@ -312,6 +326,35 @@ export function main(): void {
             .setName("channel")
             .setDescription("The channel to filter missing addresses by")
             .setRequired(false)
+        )
+        .toJSON(),
+      // New admin_safe_payout command
+      new SlashCommandBuilder()
+        .setName("admin_safe_payout")
+        .setDescription("Prepare a Safe payout CSV for a given network and token (Admin only)")
+        .addIntegerOption((option) =>
+          option
+            .setName("network")
+            .setDescription("The network to submit payout for")
+            .setRequired(true)
+            .addChoices(
+              ...Chains.map((chain) => ({
+                name: chain.name,
+                value: chain.chainId,
+              }))
+            )
+        )
+        .addStringOption((option) =>
+          option
+            .setName("token_address")
+            .setDescription("The token contract address to submit payout for")
+            .setRequired(true)
+        )
+        .addStringOption((option) =>
+          option
+            .setName("safe_address")
+            .setDescription("The Safe address to payout from")
+            .setRequired(true)
         )
         .toJSON(),
     ];
@@ -573,11 +616,11 @@ export function main(): void {
                 new ActionRowBuilder<ButtonBuilder>().addComponents(
                   new ButtonBuilder()
                     .setCustomId(`addAddress_${network}`)
-                    .setLabel(`Add Address for ${chainName} (${network})`)
+                    .setLabel(`📥 Add ${chainName} (${network}) address`)
                     .setStyle(ButtonStyle.Primary)
                 );
               await interaction.reply({
-                content: `Attention ${mentions}, please add your address for ${chainName} (${network})`,
+                content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
                 components: [button],
                 allowedMentions: {
                   users: usersWithoutAddresses.map((user) => user.id),
@@ -747,6 +790,81 @@ export function main(): void {
               ephemeral: true,
             });
           }
+        } else if (commandName === "admin_safe_payout") {
+          // New command logic
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (interaction.isChatInputCommand()) {
+
+            const chainId = interaction.options.getInteger("network", true);
+            const tokenAddress = interaction.options.getString("token_address", true);
+            const safeAddress = interaction.options.getString("safe_address", true);
+            const networkName = ChainsById[chainId]?.name || "Unknown Network";
+            const viemChain = getViemChain(chainId);
+
+            assert(viemChain, `Chain ${chainId} not found`)
+            const erc20 = viem.getContract({
+              address:viem.getAddress(tokenAddress),
+              abi: ERC20_ABI,
+              client: viem.createPublicClient({
+                chain: viemChain,
+                transport: viem.http(),
+              }),
+            })
+            const [name, symbol, decimals] = await Promise.all([
+              erc20.read.name(),
+              erc20.read.symbol(),
+              erc20.read.decimals(),
+            ])
+            console.log(commandName,{chainId,tokenAddress,safeAddress,networkName})
+            // Show instructions and a button to open the modal
+            const instructions = [
+              `**Safe Payout Preparation**`,
+              `Network: \`${networkName}\``,
+              `Safe Address: \`${safeAddress}\``,
+              `Token Address: \`${tokenAddress}\``,
+              `Token Name: \`${name}\``,
+              `Token Symbol: \`${symbol}\``,
+              `Token Decimals: \`${decimals}\``,
+              ``,
+              `Please click the button below to paste your CSV data.`,
+              `The CSV should be in the format:`,
+              `\`discordid,amount\` (one per line)`,
+              ``,
+              `After submitting, you will receive a file to download.`
+            ].join("\n");
+
+            const safeId = getId(); 
+            safeGenerations[safeId] = {
+              id: safeId,
+              chainId,
+              safeAddress,
+              tokenAddress,
+            }
+            const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(
+                  `safePayoutModal_${safeId}`
+                )
+                .setLabel("Paste CSV Data")
+                .setStyle(ButtonStyle.Primary)
+            );
+
+            await interaction.reply({
+              content: instructions,
+              components: [button],
+            });
+          }
         }
       } catch (error) {
         console.error("Error handling command:", error);
@@ -792,11 +910,31 @@ export function main(): void {
           const address = interaction.fields.getTextInputValue("addressInput");
           const userId = interaction.user.id;
           const guildId = interaction.guildId!;
+          
           await userStore.setAddress(userId, guildId, network, address);
           const chain = ChainsById[network];
           const chainName = chain ? chain.name : "Unknown Chain";
           await interaction.reply({
             content: `Address set for ${chainName} (${network}): ${address}`,
+            ephemeral: true,
+          });
+        } else if (interaction.customId.startsWith("safePayoutModal_")) {
+          // Modal submit for admin_safe_payout
+          const [_, safeId] = interaction.customId.split("_");
+          const safeData = safeGenerations[safeId];
+          if (!safeData) {
+            await interaction.reply({
+              content: "Safe data not found",
+              ephemeral: true,
+            })
+            return;
+          }
+          const csvData = interaction.fields.getTextInputValue("csvInput");
+          // For now, just return the file as the user pasted it
+          const buffer = Buffer.from(csvData, "utf-8");
+          await interaction.reply({
+            content: "Here is your CSV file as submitted.",
+            files: [{ name: "safe_payout.csv", attachment: buffer }],
             ephemeral: true,
           });
         }
@@ -819,6 +957,19 @@ export function main(): void {
         const network = parseInt(interaction.customId.split("_")[1], 10);
         const chain = ChainsById[network];
         const chainName = chain ? chain.name : "Unknown Chain";
+        const userId = interaction.user.id;
+        const guildId = interaction.guildId!;
+        // Check if the user already has an address set for this network
+        const existingAddress = await userStore.getAddress(userId, guildId, network);
+        console.log({userId, guildId, network, existingAddress})
+        if (existingAddress) {
+          await interaction.reply({
+            content: `You already have an address set for this network: ${existingAddress}`,
+            ephemeral: true,
+          });
+          return;
+        }
+
         const modal = new ModalBuilder()
           .setCustomId(`addAddress_${network}`)
           .setTitle(`Add Address for ${chainName} (${network})`);
@@ -902,17 +1053,42 @@ export function main(): void {
           const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId(`addAddress_${network}`)
-              .setLabel(`Add Address for ${chainName} (${network})`)
+              .setLabel(`📥 Add ${chainName} (${network}) address`)
               .setStyle(ButtonStyle.Primary)
           );
           await interaction.reply({
-            content: `Attention ${mentions}, please add your address for ${chainName} (${network})`,
+            content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
             components: [button],
             allowedMentions: {
               users: usersWithoutAddresses.map((user) => user.id),
             },
           });
         }
+      } else if (interaction.customId.startsWith("safePayoutModal_")) {
+        // Button click for admin_safe_payout: show modal to paste CSV
+        // Extract the networkName, tokenAddress, safeAddress from the customId
+        // Format: safePayoutModal_{networkName}_{tokenAddress}_{safeAddress}
+        const [_, ...rest] = interaction.customId.split("_");
+        const [networkNameEnc, tokenAddressEnc, safeAddressEnc] = rest;
+        // Not used for now, but could be used for further processing
+        // const networkName = decodeURIComponent(networkNameEnc);
+        // const tokenAddress = decodeURIComponent(tokenAddressEnc);
+        // const safeAddress = decodeURIComponent(safeAddressEnc);
+
+        const modal = new ModalBuilder()
+          .setCustomId(`safePayoutModal_${networkNameEnc}_${tokenAddressEnc}_${safeAddressEnc}`)
+          .setTitle("Paste Safe Payout CSV");
+
+        const input = new TextInputBuilder()
+          .setCustomId("csvInput")
+          .setLabel("Paste CSV (discordid,amount per line)")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true);
+
+        const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
       }
     }
   });
