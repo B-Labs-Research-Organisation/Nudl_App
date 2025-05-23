@@ -1,7 +1,8 @@
 import assert from "assert";
-
+import * as viem from "viem";
+import * as chains from "viem/chains";
 export function getId(): string {
-  return Math.random().toString(36).substr(2, 9);
+  return Math.random().toString(36).substring(2, 9);
 }
 export function encodeKey(
   arr: (string | number)[],
@@ -86,3 +87,11 @@ export function RpcFactory(
   };
 }
 
+
+export function getViemChain(chainId: number): viem.Chain{
+  const chain = Object.values(chains).find((chain) => chain.id === chainId);
+  if (!chain) {
+    throw new Error(`Chain ${chainId} not found`)
+  }
+  return chain
+}
