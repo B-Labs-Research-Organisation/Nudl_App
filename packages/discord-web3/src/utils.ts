@@ -1,6 +1,7 @@
 import assert from "assert";
 import * as viem from "viem";
 import * as chains from "viem/chains";
+import { Client, User, GuildMember } from "discord.js";
 export function getId(): string {
   return Math.random().toString(36).substring(2, 9);
 }
@@ -95,3 +96,185 @@ export function getViemChain(chainId: number): viem.Chain{
   }
   return chain
 }
+
+/**
+ * Converts a list of [address, amount] tuples into a Gnosis Safe transaction batch JSON.
+ * @param params Object containing:
+ *   - entries: Array<[string, string]>; // [toAddress, amount] as string (amount can be decimal)
+ *   - chainId: number;
+ *   - safeAddress: string;
+ *   - erc20Address: string;
+ *   - decimals: number;
+ *   - txBuilderVersion?: string;
+ *   - description?: string;
+ * @returns The Safe transaction batch JSON object.
+ */
+export function generateSafeTransactionBatch(params: {
+  entries: Array<[string, string]>,
+  chainId: number,
+  safeAddress: string,
+  erc20Address: string,
+  decimals: number,
+  txBuilderVersion?: string,
+  description?: string,
+}) {
+  const {
+    entries,
+    chainId,
+    safeAddress,
+    erc20Address,
+    decimals,
+    txBuilderVersion = "1.17.0",
+    description = "",
+  } = params;
+
+  const transactions: any[] = [];
+  let totalAmount = BigInt(0);
+  const errors: string[] = [];
+
+  entries.forEach(([toaddress, amount], index) => {
+    if (
+      typeof amount === "string" && amount.trim().length > 0 &&
+      typeof toaddress === "string" && toaddress.trim().length > 0
+    ) {
+      try {
+        const decimalFactor = BigInt(10) ** BigInt(decimals);
+        const [whole, fraction = "0"] = amount.trim().split(".");
+        const wholePart = BigInt(whole) * decimalFactor;
+        const fractionPart = BigInt(fraction.padEnd(decimals, "0"));
+        const totalValue = wholePart + fractionPart;
+        totalAmount += totalValue;
+
+        transactions.push({
+          to: erc20Address,
+          value: "0",
+          data: null,
+          contractMethod: {
+            inputs: [
+              { name: "to", type: "address", internalType: "address" },
+              { name: "value", type: "uint256", internalType: "uint256" },
+            ],
+            name: "transfer",
+            payable: false,
+          },
+          contractInputsValues: {
+            to: toaddress.trim(),
+            value: totalValue.toString(),
+          },
+        });
+      } catch (e) {
+        errors.push(`Line ${index + 1}: Error parsing amount "${amount}"`);
+      }
+    } else {
+      if (!amount || amount.trim().length === 0) {
+        errors.push(`Line ${index + 1}: Missing 'amount'`);
+      }
+      if (!toaddress || toaddress.trim().length === 0) {
+        errors.push(`Line ${index + 1}: Missing 'toaddress'`);
+      }
+    }
+  });
+
+  const batch = {
+    version: "1.0",
+    chainId: chainId,
+    createdAt: Date.now(),
+    meta: {
+      name: "Transactions Batch",
+      description: description,
+      txBuilderVersion: txBuilderVersion,
+      createdFromSafeAddress: safeAddress,
+      createdFromOwnerAddress: "",
+    },
+    transactions: transactions,
+  };
+
+  return {
+    batch,
+    totalAmount,
+    errors,
+    totalAmountFormatted: (Number(totalAmount) / Math.pow(10, decimals)).toFixed(decimals),
+  };
+}
+
+
+/**
+ * Attempts to resolve a Discord user from a "MaybeId" string, which could be:
+ * - a Discord user ID (snowflake)
+ * - a Discord username with discriminator (e.g. "user#1234")
+ * - a Discord global username (e.g. "@username" or "username")
+ * - a Discord display name (nickname in a guild)
+ * 
+ * @param client The Discord.js Client instance
+ * @param maybeId The identifier to resolve
+ * @param guildId The guild ID to search in (required)
+ * @returns The resolved User object, or null if not found
+ */
+export async function resolveDiscordUser(
+  client: Client,
+  maybeId: string,
+  guildId: string
+): Promise<User | null> {
+  // Try direct user ID (snowflake)
+  const idMatch = maybeId.match(/^\d{15,21}$/);
+  if (idMatch) {
+    try {
+      return await client.users.fetch(maybeId);
+    } catch {
+      // continue
+    }
+  }
+
+  // Try username#discriminator
+  const tagMatch = maybeId.match(/^(.+)#(\d{4})$/);
+  if (tagMatch) {
+    const [_, username, discriminator] = tagMatch;
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      const members = await guild.members.fetch({ query: username, limit: 10 });
+      const found = members.find(
+        (m: GuildMember) =>
+          m.user.username === username &&
+          m.user.discriminator === discriminator
+      );
+      if (found) return found.user;
+    } catch {
+      // ignore
+    }
+  }
+
+  // Try global username (with or without @)
+  let usernameQuery = maybeId;
+  if (usernameQuery.startsWith("@")) usernameQuery = usernameQuery.slice(1);
+  if (usernameQuery.length > 2) {
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      const members = await guild.members.fetch({ query: usernameQuery, limit: 10 });
+      const found = members.find(
+        (m: GuildMember) => m.user.username === usernameQuery
+      );
+      if (found) return found.user;
+    } catch {
+      // ignore
+    }
+  }
+
+  // Try display name/nickname in the guild
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const members = await guild.members.fetch({ query: maybeId, limit: 10 });
+    const found = members.find(
+      (m: GuildMember) =>
+        m.displayName === maybeId ||
+        m.nickname === maybeId
+    );
+    if (found) return found.user;
+  } catch {
+    // ignore
+  }
+
+  // Not found
+  return null;
+}
+
+
