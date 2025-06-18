@@ -90,42 +90,42 @@ export function RpcFactory(
   };
 }
 
-export function getViemChain(chainId: number): viem.Chain{
+export function getViemChain(chainId: number): viem.Chain {
   const chain = Object.values(chains).find((chain) => chain.id === chainId);
   if (!chain) {
-    throw new Error(`Chain ${chainId} not found`)
+    throw new Error(`Chain ${chainId} not found`);
   }
-  return chain
+  return chain;
 }
 
-export const stringifyReplacer = (_: string, value: any) => (value === undefined ? null : value)
+export const stringifyReplacer = (_: string, value: any) =>
+  value === undefined ? null : value;
 
 const serializeJSONObject = (json: any): string => {
   if (Array.isArray(json)) {
-    return `[${json.map(el => serializeJSONObject(el)).join(',')}]`
+    return `[${json.map((el) => serializeJSONObject(el)).join(",")}]`;
   }
 
-  if (typeof json === 'object' && json !== null) {
-    let acc = ''
-    const keys = Object.keys(json).sort()
-    acc += `{${JSON.stringify(keys, stringifyReplacer)}`
+  if (typeof json === "object" && json !== null) {
+    let acc = "";
+    const keys = Object.keys(json).sort();
+    acc += `{${JSON.stringify(keys, stringifyReplacer)}`;
 
     for (let i = 0; i < keys.length; i++) {
-      acc += `${serializeJSONObject(json[keys[i]])},`
+      acc += `${serializeJSONObject(json[keys[i]])},`;
     }
 
-    return `${acc}}`
+    return `${acc}}`;
   }
 
-  return `${JSON.stringify(json, stringifyReplacer)}`
-}
-
+  return `${JSON.stringify(json, stringifyReplacer)}`;
+};
 
 /**
  * Computes the Safe transaction builder checksum using keccak256 hash
  * over the deterministic JSON string (with `meta.name` nullified).
  */
-export function calculateSafeChecksum(batchJson: any): string | undefined{
+export function calculateSafeChecksum(batchJson: any): string | undefined {
   const normalized = {
     ...batchJson,
     meta: {
@@ -151,13 +151,13 @@ export function calculateSafeChecksum(batchJson: any): string | undefined{
  * @returns The Safe transaction batch JSON object.
  */
 export function generateSafeTransactionBatch(params: {
-  entries: Array<[string, string]>,
-  chainId: number,
-  safeAddress: string,
-  erc20Address: string,
-  decimals: number,
-  txBuilderVersion?: string,
-  description?: string,
+  entries: Array<[string, string]>;
+  chainId: number;
+  safeAddress: string;
+  erc20Address: string;
+  decimals: number;
+  txBuilderVersion?: string;
+  description?: string;
 }) {
   const {
     entries,
@@ -175,8 +175,10 @@ export function generateSafeTransactionBatch(params: {
 
   entries.forEach(([toaddress, amount], index) => {
     if (
-      typeof amount === "string" && amount.trim().length > 0 &&
-      typeof toaddress === "string" && toaddress.trim().length > 0
+      typeof amount === "string" &&
+      amount.trim().length > 0 &&
+      typeof toaddress === "string" &&
+      toaddress.trim().length > 0
     ) {
       try {
         const decimalFactor = BigInt(10) ** BigInt(decimals);
@@ -253,10 +255,11 @@ export function generateSafeTransactionBatch(params: {
     batch,
     totalAmount,
     errors,
-    totalAmountFormatted: (Number(totalAmount) / Math.pow(10, decimals)).toFixed(decimals),
+    totalAmountFormatted: (
+      Number(totalAmount) / Math.pow(10, decimals)
+    ).toFixed(decimals),
   };
 }
-
 
 /**
  * Attempts to resolve a Discord user from a "MaybeId" string, which could be:
@@ -264,7 +267,7 @@ export function generateSafeTransactionBatch(params: {
  * - a Discord username with discriminator (e.g. "user#1234")
  * - a Discord global username (e.g. "@username" or "username")
  * - a Discord display name (nickname in a guild)
- * 
+ *
  * @param client The Discord.js Client instance
  * @param maybeId The identifier to resolve
  * @param guildId The guild ID to search in (required)
@@ -273,7 +276,7 @@ export function generateSafeTransactionBatch(params: {
 export async function resolveDiscordUser(
   client: Client,
   maybeId: string,
-  guildId: string
+  guildId: string,
 ): Promise<User | null> {
   // Try direct user ID (snowflake)
   const idMatch = maybeId.match(/^\d{15,21}$/);
@@ -295,7 +298,7 @@ export async function resolveDiscordUser(
       const found = members.find(
         (m: GuildMember) =>
           m.user.username === username &&
-          m.user.discriminator === discriminator
+          m.user.discriminator === discriminator,
       );
       if (found) return found.user;
     } catch {
@@ -309,9 +312,12 @@ export async function resolveDiscordUser(
   if (usernameQuery.length > 2) {
     try {
       const guild = await client.guilds.fetch(guildId);
-      const members = await guild.members.fetch({ query: usernameQuery, limit: 10 });
+      const members = await guild.members.fetch({
+        query: usernameQuery,
+        limit: 10,
+      });
       const found = members.find(
-        (m: GuildMember) => m.user.username === usernameQuery
+        (m: GuildMember) => m.user.username === usernameQuery,
       );
       if (found) return found.user;
     } catch {
@@ -324,9 +330,7 @@ export async function resolveDiscordUser(
     const guild = await client.guilds.fetch(guildId);
     const members = await guild.members.fetch({ query: maybeId, limit: 10 });
     const found = members.find(
-      (m: GuildMember) =>
-        m.displayName === maybeId ||
-        m.nickname === maybeId
+      (m: GuildMember) => m.displayName === maybeId || m.nickname === maybeId,
     );
     if (found) return found.user;
   } catch {

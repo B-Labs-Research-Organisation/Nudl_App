@@ -41,7 +41,15 @@ import * as viem from "viem";
 import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import { Api } from "./api";
-import { RpcFactory, ChainsById, Chains, getId, getViemChain, resolveDiscordUser, generateSafeTransactionBatch } from "./utils";
+import {
+  RpcFactory,
+  ChainsById,
+  Chains,
+  getId,
+  getViemChain,
+  resolveDiscordUser,
+  generateSafeTransactionBatch,
+} from "./utils";
 import { Service as RouterService } from "./router";
 import { createClient } from "redis";
 import assert from "assert";
@@ -127,13 +135,16 @@ const fakeEthAddresses = [
   },
 ];
 
-const safeGenerations:Record<string,{
-  id: string,
-  chainId:number,
-  safeAddress:string,
-  tokenAddress:string,
-  decimals: number,
-}> = {}
+const safeGenerations: Record<
+  string,
+  {
+    id: string;
+    chainId: number;
+    safeAddress: string;
+    tokenAddress: string;
+    decimals: number;
+  }
+> = {};
 
 export function main(): void {
   const client = new Client({
@@ -159,7 +170,7 @@ export function main(): void {
     console.log("Discord client is ready!");
 
     const rest = new REST({ version: "10" }).setToken(
-      process.env.DISCORD_TOKEN as string
+      process.env.DISCORD_TOKEN as string,
     );
 
     const commands = [
@@ -183,15 +194,15 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              }))
-            )
+              })),
+            ),
         )
         .addStringOption((option) =>
           option
             .setName("address")
             .setDescription("The address to set")
             .setRequired(true)
-            .setAutocomplete(true)
+            .setAutocomplete(true),
         ) // Enable autocomplete for the address field
         .toJSON(),
       new SlashCommandBuilder()
@@ -206,8 +217,8 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              }))
-            )
+              })),
+            ),
         )
         .addStringOption(
           (option) =>
@@ -215,7 +226,7 @@ export function main(): void {
               .setName("address")
               .setDescription("The address to remove")
               .setRequired(true)
-              .setAutocomplete(true) // Enable autocomplete for the address field
+              .setAutocomplete(true), // Enable autocomplete for the address field
         )
         .toJSON(),
       new SlashCommandBuilder()
@@ -225,7 +236,7 @@ export function main(): void {
       new SlashCommandBuilder()
         .setName("admin_list_missing_addresses")
         .setDescription(
-          "Lists all missing addresses for a given network (Admin only)"
+          "Lists all missing addresses for a given network (Admin only)",
         )
         .addIntegerOption((option) =>
           option
@@ -236,20 +247,20 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              }))
-            )
+              })),
+            ),
         )
         .addRoleOption((option) =>
           option
             .setName("role")
             .setDescription("The role to filter missing addresses by")
-            .setRequired(false)
+            .setRequired(false),
         )
         .addChannelOption((option) =>
           option
             .setName("channel")
             .setDescription("The channel to filter missing addresses by")
-            .setRequired(false)
+            .setRequired(false),
         )
         .toJSON(),
       new SlashCommandBuilder()
@@ -265,44 +276,44 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              }))
-            )
+              })),
+            ),
         )
         .addUserOption((option) =>
           option
             .setName("user")
             .setDescription("The user to search for addresses")
-            .setRequired(false)
+            .setRequired(false),
         )
         .addRoleOption((option) =>
           option
             .setName("role")
             .setDescription("The role to filter addresses by")
-            .setRequired(false)
+            .setRequired(false),
         )
         .addChannelOption((option) =>
           option
             .setName("channel")
             .setDescription("The channel to filter addresses by")
-            .setRequired(false)
+            .setRequired(false),
         )
         .addBooleanOption((option) =>
           option
             .setName("export")
             .setDescription("Whether to export the addresses to a file")
-            .setRequired(false)
+            .setRequired(false),
         )
         .toJSON(),
       new SlashCommandBuilder()
         .setName("admin_seed_addresses")
         .setDescription(
-          "Seeds the user store with fake Ethereum addresses (Admin only)"
+          "Seeds the user store with fake Ethereum addresses (Admin only)",
         )
         .toJSON(),
       new SlashCommandBuilder()
         .setName("admin_notify_missing_addresses")
         .setDescription(
-          "Notifies users missing addresses for a given network (Admin only)"
+          "Notifies users missing addresses for a given network (Admin only)",
         )
         .addIntegerOption((option) =>
           option
@@ -313,26 +324,28 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              }))
-            )
+              })),
+            ),
         )
         .addRoleOption((option) =>
           option
             .setName("role")
             .setDescription("The role to filter missing addresses by")
-            .setRequired(false)
+            .setRequired(false),
         )
         .addChannelOption((option) =>
           option
             .setName("channel")
             .setDescription("The channel to filter missing addresses by")
-            .setRequired(false)
+            .setRequired(false),
         )
         .toJSON(),
       // New admin_safe_payout command
       new SlashCommandBuilder()
         .setName("admin_safe_payout")
-        .setDescription("Prepare a Safe payout CSV for a given network and token (Admin only)")
+        .setDescription(
+          "Prepare a Safe payout CSV for a given network and token (Admin only)",
+        )
         .addIntegerOption((option) =>
           option
             .setName("network")
@@ -342,20 +355,20 @@ export function main(): void {
               ...Chains.map((chain) => ({
                 name: chain.name,
                 value: chain.chainId,
-              }))
-            )
+              })),
+            ),
         )
         .addStringOption((option) =>
           option
             .setName("token_address")
             .setDescription("The token contract address to submit payout for")
-            .setRequired(true)
+            .setRequired(true),
         )
         .addStringOption((option) =>
           option
             .setName("safe_address")
             .setDescription("The Safe address to payout from")
-            .setRequired(true)
+            .setRequired(true),
         )
         .toJSON(),
     ];
@@ -365,7 +378,7 @@ export function main(): void {
 
       await rest.put(
         Routes.applicationCommands(process.env.CLIENT_ID as string),
-        { body: commands }
+        { body: commands },
       );
 
       console.log("Successfully reloaded application (/) commands.");
@@ -446,7 +459,7 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             if (
               !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator
+                PermissionsBitField.Flags.Administrator,
               )
             ) {
               await interaction.reply({
@@ -472,15 +485,18 @@ export function main(): void {
             }
             const guildId = guild.id;
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(network, guildId);
+            const allAddresses = await userStore.getUsersByChain(
+              network,
+              guildId,
+            );
 
             const usersWithAddresses = new Set(
-              allAddresses.map((addr) => addr.userId)
+              allAddresses.map((addr) => addr.userId),
             );
             let usersWithoutAddresses = Array.from(
-              allDiscordUsers.values()
+              allDiscordUsers.values(),
             ).filter(
-              (user) => !usersWithAddresses.has(user.id) && !user.user.bot
+              (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
             );
 
             if (role) {
@@ -488,10 +504,10 @@ export function main(): void {
               const roleMembers = guild.roles.cache.get(role.id)?.members;
               if (roleMembers && roleMembers.size > 0) {
                 const roleMemberIds = new Set(
-                  roleMembers.map((member) => member.id)
+                  roleMembers.map((member) => member.id),
                 );
                 usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                  roleMemberIds.has(user.id)
+                  roleMemberIds.has(user.id),
                 );
               } else {
                 usersWithoutAddresses = [];
@@ -502,7 +518,7 @@ export function main(): void {
               await channel.fetch();
               const channelMembers = await channel.members;
               usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                channelMembers.has(user.id)
+                channelMembers.has(user.id),
               );
             }
 
@@ -515,7 +531,7 @@ export function main(): void {
               const missingAddressList = usersWithoutAddresses
                 .map(
                   (user, index) =>
-                    `${index + 1}. ${user.displayName}(${user.user.username})`
+                    `${index + 1}. ${user.displayName}(${user.user.username})`,
                 )
                 .join("\n");
               const customIdParts = [
@@ -530,7 +546,7 @@ export function main(): void {
                   new ButtonBuilder()
                     .setCustomId(customId)
                     .setLabel("Announce to Missing Users")
-                    .setStyle(ButtonStyle.Secondary)
+                    .setStyle(ButtonStyle.Secondary),
                 );
               await interaction.reply({
                 content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for ${ChainsById[network].name} (${network}):\n${missingAddressList}`,
@@ -543,7 +559,7 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             if (
               !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator
+                PermissionsBitField.Flags.Administrator,
               )
             ) {
               await interaction.reply({
@@ -569,15 +585,18 @@ export function main(): void {
             }
             const guildId = guild.id;
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(network, guildId);
+            const allAddresses = await userStore.getUsersByChain(
+              network,
+              guildId,
+            );
 
             const usersWithAddresses = new Set(
-              allAddresses.map((addr) => addr.userId)
+              allAddresses.map((addr) => addr.userId),
             );
             let usersWithoutAddresses = Array.from(
-              allDiscordUsers.values()
+              allDiscordUsers.values(),
             ).filter(
-              (user) => !usersWithAddresses.has(user.id) && !user.user.bot
+              (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
             );
 
             if (role) {
@@ -585,10 +604,10 @@ export function main(): void {
               const roleMembers = guild.roles.cache.get(role.id)?.members;
               if (roleMembers && roleMembers.size > 0) {
                 const roleMemberIds = new Set(
-                  roleMembers.map((member) => member.id)
+                  roleMembers.map((member) => member.id),
                 );
                 usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                  roleMemberIds.has(user.id)
+                  roleMemberIds.has(user.id),
                 );
               } else {
                 usersWithoutAddresses = [];
@@ -599,7 +618,7 @@ export function main(): void {
               await channel.fetch();
               const channelMembers = await channel.members;
               usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                channelMembers.has(user.id)
+                channelMembers.has(user.id),
               );
             }
 
@@ -618,7 +637,7 @@ export function main(): void {
                   new ButtonBuilder()
                     .setCustomId(`addAddress_${network}`)
                     .setLabel(`📥 Add ${chainName} (${network}) address`)
-                    .setStyle(ButtonStyle.Primary)
+                    .setStyle(ButtonStyle.Primary),
                 );
               await interaction.reply({
                 content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
@@ -633,7 +652,7 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             if (
               !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator
+                PermissionsBitField.Flags.Administrator,
               )
             ) {
               await interaction.reply({
@@ -670,7 +689,7 @@ export function main(): void {
 
             if (user) {
               filteredUsers = filteredUsers.filter(
-                (member) => member.id === user.id
+                (member) => member.id === user.id,
               );
             }
 
@@ -678,10 +697,10 @@ export function main(): void {
               const roleMembers = guild.roles.cache.get(role.id)?.members;
               if (roleMembers) {
                 const roleMemberIds = new Set(
-                  roleMembers.map((member) => member.id)
+                  roleMembers.map((member) => member.id),
                 );
                 filteredUsers = filteredUsers.filter((member) =>
-                  roleMemberIds.has(member.id)
+                  roleMemberIds.has(member.id),
                 );
               } else {
                 filteredUsers = [];
@@ -692,7 +711,7 @@ export function main(): void {
               await channel.fetch();
               const channelMembers = await channel.members;
               filteredUsers = filteredUsers.filter((member) =>
-                channelMembers.has(member.id)
+                channelMembers.has(member.id),
               );
             }
 
@@ -705,7 +724,7 @@ export function main(): void {
                     ? await userStore.getUsersByChain(network, guildId)
                     : await userStore.getAllAddresses(guildId);
                 return addresses.filter((addr) => addr.userId === member.id);
-              })
+              }),
             );
 
             const flatUserAddresses = userAddresses.flat();
@@ -735,18 +754,18 @@ export function main(): void {
             // TODO: show role in list
             const userAddressList = await Promise.all(userPromises);
             const sortedUserAddressList = userAddressList.sort((a, b) =>
-              a.displayName.localeCompare(b.displayName)
+              a.displayName.localeCompare(b.displayName),
             );
             const addressList = sortedUserAddressList
               .map(
                 (
                   { userId, displayName, address, chainId, username },
-                  index
+                  index,
                 ) => {
                   const chain = ChainsById[chainId];
                   const chainName = chain ? chain.name : "Unknown Chain";
                   return `${index + 1}. ${displayName}(${username}) ${chainName}(${chainId}) ${address}`;
-                }
+                },
               )
               .join("\n");
             if (exportToFile) {
@@ -771,7 +790,7 @@ export function main(): void {
           if (interaction.isChatInputCommand()) {
             if (
               !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator
+                PermissionsBitField.Flags.Administrator,
               )
             ) {
               await interaction.reply({
@@ -795,7 +814,7 @@ export function main(): void {
           // New command logic
           if (
             !interaction.memberPermissions?.has(
-              PermissionsBitField.Flags.Administrator
+              PermissionsBitField.Flags.Administrator,
             )
           ) {
             await interaction.reply({
@@ -806,28 +825,38 @@ export function main(): void {
           }
 
           if (interaction.isChatInputCommand()) {
-
             const chainId = interaction.options.getInteger("network", true);
-            const tokenAddress = interaction.options.getString("token_address", true);
-            const safeAddress = interaction.options.getString("safe_address", true);
+            const tokenAddress = interaction.options.getString(
+              "token_address",
+              true,
+            );
+            const safeAddress = interaction.options.getString(
+              "safe_address",
+              true,
+            );
             const networkName = ChainsById[chainId]?.name || "Unknown Network";
             const viemChain = getViemChain(chainId);
 
-            assert(viemChain, `Chain ${chainId} not found`)
+            assert(viemChain, `Chain ${chainId} not found`);
             const erc20 = viem.getContract({
-              address:viem.getAddress(tokenAddress),
+              address: viem.getAddress(tokenAddress),
               abi: ERC20_ABI,
               client: viem.createPublicClient({
                 chain: viemChain,
                 transport: viem.http(),
               }),
-            })
+            });
             const [name, symbol, decimals] = await Promise.all([
               erc20.read.name(),
               erc20.read.symbol(),
               erc20.read.decimals(),
-            ])
-            console.log(commandName,{chainId,tokenAddress,safeAddress,networkName})
+            ]);
+            console.log(commandName, {
+              chainId,
+              tokenAddress,
+              safeAddress,
+              networkName,
+            });
             // Show instructions and a button to open the modal
             const instructions = [
               `**Safe Payout Preparation**`,
@@ -842,24 +871,22 @@ export function main(): void {
               `The CSV should be in the format:`,
               `\`discordid,amount\` (one per line)`,
               ``,
-              `After submitting, you will receive a file to download.`
+              `After submitting, you will receive a file to download.`,
             ].join("\n");
 
-            const safeId = getId(); 
+            const safeId = getId();
             safeGenerations[safeId] = {
               id: safeId,
               chainId,
               safeAddress,
               tokenAddress,
               decimals,
-            }
+            };
             const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
               new ButtonBuilder()
-                .setCustomId(
-                  `safePayoutModal_${safeId}`
-                )
+                .setCustomId(`safePayoutModal_${safeId}`)
                 .setLabel("Paste CSV Data")
-                .setStyle(ButtonStyle.Primary)
+                .setStyle(ButtonStyle.Primary),
             );
 
             await interaction.reply({
@@ -913,7 +940,7 @@ export function main(): void {
           const address = interaction.fields.getTextInputValue("addressInput");
           const userId = interaction.user.id;
           const guildId = interaction.guildId!;
-          
+
           await userStore.setAddress(userId, guildId, network, address);
           const chain = ChainsById[network];
           const chainName = chain ? chain.name : "Unknown Chain";
@@ -922,7 +949,7 @@ export function main(): void {
             ephemeral: true,
           });
         } else if (interaction.customId.startsWith("safePayoutModal_")) {
-          await interaction.deferReply({ephemeral:true})
+          await interaction.deferReply({ ephemeral: true });
           // Modal submit for admin_safe_payout
           const [_, safeId] = interaction.customId.split("_");
           const safeData = safeGenerations[safeId];
@@ -930,15 +957,15 @@ export function main(): void {
             await interaction.reply({
               content: "Safe data not found",
               ephemeral: true,
-            })
+            });
             return;
           }
           const csvData = interaction.fields.getTextInputValue("csvInput");
           // Parse CSV lines into [id, amount] pairs
           const lines = csvData
             .split("\n")
-            .map(line => line.trim())
-            .filter(line => line.length > 0 && !line.startsWith("#"));
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0 && !line.startsWith("#"));
 
           const errors: string[] = [];
           const userIdToAmount: Record<string, string> = {};
@@ -946,14 +973,18 @@ export function main(): void {
 
           // 1. Resolve Discord users
           for (let i = 0; i < lines.length; i++) {
-            const [idRaw, amountRaw] = lines[i].split(",").map(s => s.trim());
+            const [idRaw, amountRaw] = lines[i].split(",").map((s) => s.trim());
             if (!idRaw || !amountRaw) {
               errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);
               continue;
             }
             idToInput[idRaw] = lines[i];
             try {
-              const user = await resolveDiscordUser(client, idRaw, interaction.guildId!);
+              const user = await resolveDiscordUser(
+                client,
+                idRaw,
+                interaction.guildId!,
+              );
               if (!user) {
                 errors.push(`Line ${i + 1}: Could not resolve user "${idRaw}"`);
                 continue;
@@ -970,9 +1001,15 @@ export function main(): void {
           for (const userId in userIdToAmount) {
             try {
               // safeData should contain: { chainId, safeAddress, erc20Address, decimals }
-              const address = await userStore.getAddress(userId, interaction.guildId!, safeData.chainId);
+              const address = await userStore.getAddress(
+                userId,
+                interaction.guildId!,
+                safeData.chainId,
+              );
               if (!address) {
-                errors.push(`User ${userId}: No address found for chain ${safeData.chainId}`);
+                errors.push(
+                  `User ${userId}: No address found for chain ${safeData.chainId}`,
+                );
                 continue;
               }
               addressEntries.push([address, userIdToAmount[userId]]);
@@ -1003,7 +1040,7 @@ export function main(): void {
             {
               name: `safe_batch_${dateStr}.json`,
               attachment: Buffer.from(batchJson, "utf-8"),
-            }
+            },
           ];
           let content = `✅ Safe transaction batch generated for ${addressEntries.length} entries.`;
           content += `\nTotal amount: ${batchResult.totalAmountFormatted}`;
@@ -1018,22 +1055,22 @@ export function main(): void {
       } catch (error) {
         console.error("Error handling modal submit:", error);
         if (error instanceof Error) {
-          if(interaction.deferred){
+          if (interaction.deferred) {
             await interaction.editReply({
               content: error.message,
             });
-          }else{
+          } else {
             await interaction.reply({
               content: error.message,
               ephemeral: true,
             });
           }
         } else {
-          if(interaction.deferred){
+          if (interaction.deferred) {
             await interaction.editReply({
               content: "An unknown error occurred.",
             });
-          }else{
+          } else {
             await interaction.reply({
               content: "An unknown error occurred.",
               ephemeral: true,
@@ -1049,8 +1086,12 @@ export function main(): void {
         const userId = interaction.user.id;
         const guildId = interaction.guildId!;
         // Check if the user already has an address set for this network
-        const existingAddress = await userStore.getAddress(userId, guildId, network);
-        console.log({userId, guildId, network, existingAddress})
+        const existingAddress = await userStore.getAddress(
+          userId,
+          guildId,
+          network,
+        );
+        console.log({ userId, guildId, network, existingAddress });
         if (existingAddress) {
           await interaction.reply({
             content: `You already have an address set for this network: ${existingAddress}`,
@@ -1096,10 +1137,10 @@ export function main(): void {
         const allAddresses = await userStore.getUsersByChain(network, guildId);
 
         const usersWithAddresses = new Set(
-          allAddresses.map((addr) => addr.userId)
+          allAddresses.map((addr) => addr.userId),
         );
         let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
-          (user) => !usersWithAddresses.has(user.id) && !user.user.bot
+          (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
         );
 
         if (roleId) {
@@ -1107,10 +1148,10 @@ export function main(): void {
           const roleMembers = guild.roles.cache.get(roleId)?.members;
           if (roleMembers && roleMembers.size > 0) {
             const roleMemberIds = new Set(
-              roleMembers.map((member) => member.id)
+              roleMembers.map((member) => member.id),
             );
             usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-              roleMemberIds.has(user.id)
+              roleMemberIds.has(user.id),
             );
           } else {
             usersWithoutAddresses = [];
@@ -1121,11 +1162,11 @@ export function main(): void {
           const channel = await guild.channels.fetch(channelId);
           assert(
             channel !== null && channel.isTextBased(),
-            "Must be a text channel"
+            "Must be a text channel",
           );
           const channelMembers = (channel as TextChannel).members;
           usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-            channelMembers.has(user.id)
+            channelMembers.has(user.id),
           );
         }
 
@@ -1143,7 +1184,7 @@ export function main(): void {
             new ButtonBuilder()
               .setCustomId(`addAddress_${network}`)
               .setLabel(`📥 Add ${chainName} (${network}) address`)
-              .setStyle(ButtonStyle.Primary)
+              .setStyle(ButtonStyle.Primary),
           );
           await interaction.reply({
             content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
@@ -1167,9 +1208,9 @@ export function main(): void {
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true);
 
-        const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+        const actionRow =
+          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
         modal.addComponents(actionRow);
-        
 
         await interaction.showModal(modal);
       }
