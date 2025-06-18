@@ -211,9 +211,9 @@ export function Users(store: Store<string, string>) {
       });
   }
 
-  async function getAllAddresses(guildId: string): Promise<
-    { userId: string; chainId: number; address: string }[]
-  > {
+  async function getAllAddresses(
+    guildId: string,
+  ): Promise<{ userId: string; chainId: number; address: string }[]> {
     const entries = await store.entries();
     return Array.from(entries)
       .filter(([key, _]) => {
