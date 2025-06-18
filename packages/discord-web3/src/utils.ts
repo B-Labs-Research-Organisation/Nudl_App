@@ -2,6 +2,8 @@ import assert from "assert";
 import * as viem from "viem";
 import * as chains from "viem/chains";
 import { Client, User, GuildMember } from "discord.js";
+import { keccak256, toBytes } from "viem";
+
 export function getId(): string {
   return Math.random().toString(36).substring(2, 9);
 }
@@ -88,7 +90,6 @@ export function RpcFactory(
   };
 }
 
-
 export function getViemChain(chainId: number): viem.Chain{
   const chain = Object.values(chains).find((chain) => chain.id === chainId);
   if (!chain) {
@@ -97,8 +98,48 @@ export function getViemChain(chainId: number): viem.Chain{
   return chain
 }
 
+export const stringifyReplacer = (_: string, value: any) => (value === undefined ? null : value)
+
+const serializeJSONObject = (json: any): string => {
+  if (Array.isArray(json)) {
+    return `[${json.map(el => serializeJSONObject(el)).join(',')}]`
+  }
+
+  if (typeof json === 'object' && json !== null) {
+    let acc = ''
+    const keys = Object.keys(json).sort()
+    acc += `{${JSON.stringify(keys, stringifyReplacer)}`
+
+    for (let i = 0; i < keys.length; i++) {
+      acc += `${serializeJSONObject(json[keys[i]])},`
+    }
+
+    return `${acc}}`
+  }
+
+  return `${JSON.stringify(json, stringifyReplacer)}`
+}
+
+
 /**
- * Converts a list of [address, amount] tuples into a Gnosis Safe transaction batch JSON.
+ * Computes the Safe transaction builder checksum using keccak256 hash
+ * over the deterministic JSON string (with `meta.name` nullified).
+ */
+export function calculateSafeChecksum(batchJson: any): string | undefined{
+  const normalized = {
+    ...batchJson,
+    meta: {
+      ...batchJson.meta,
+      name: null, // required: exclude `meta.name` from the hash
+    },
+  };
+  const serialized = serializeJSONObject(normalized);
+  return keccak256(toBytes(serialized));
+}
+
+/**
+ * Converts a list of [address, amount] tuples into a Gnosis Safe transaction batch JSON,
+ * and computes a checksum for the batch metadata.
  * @param params Object containing:
  *   - entries: Array<[string, string]>; // [toAddress, amount] as string (amount can be decimal)
  *   - chainId: number;
@@ -124,7 +165,7 @@ export function generateSafeTransactionBatch(params: {
     safeAddress,
     erc20Address,
     decimals,
-    txBuilderVersion = "1.17.0",
+    txBuilderVersion = "1.18.0",
     description = "",
   } = params;
 
@@ -146,7 +187,7 @@ export function generateSafeTransactionBatch(params: {
         totalAmount += totalValue;
 
         transactions.push({
-          to: erc20Address,
+          to: viem.getAddress(erc20Address),
           value: "0",
           data: null,
           contractMethod: {
@@ -158,7 +199,7 @@ export function generateSafeTransactionBatch(params: {
             payable: false,
           },
           contractInputsValues: {
-            to: toaddress.trim(),
+            to: viem.getAddress(toaddress.trim()),
             value: totalValue.toString(),
           },
         });
@@ -175,18 +216,37 @@ export function generateSafeTransactionBatch(params: {
     }
   });
 
-  const batch = {
+  // Prepare the batch object without checksum
+  const createdAt = Date.now();
+  const metaWithoutChecksum = {
+    name: "Transactions Batch",
+    description: description,
+    txBuilderVersion: txBuilderVersion,
+    createdFromSafeAddress: safeAddress,
+    createdFromOwnerAddress: "",
+    // checksum will be added after calculation
+  };
+
+  const batchWithoutChecksum = {
     version: "1.0",
-    chainId: chainId,
-    createdAt: Date.now(),
-    meta: {
-      name: "Transactions Batch",
-      description: description,
-      txBuilderVersion: txBuilderVersion,
-      createdFromSafeAddress: safeAddress,
-      createdFromOwnerAddress: "",
-    },
+    chainId: String(chainId),
+    createdAt,
+    meta: metaWithoutChecksum,
     transactions: transactions,
+  };
+
+  // Calculate checksum using modular function
+  const checksum = calculateSafeChecksum(batchWithoutChecksum);
+
+  // Add checksum to meta
+  const metaWithChecksum = {
+    ...metaWithoutChecksum,
+    checksum,
+  };
+
+  const batch = {
+    ...batchWithoutChecksum,
+    meta: metaWithChecksum,
   };
 
   return {
@@ -276,5 +336,3 @@ export async function resolveDiscordUser(
   // Not found
   return null;
 }
-
-
