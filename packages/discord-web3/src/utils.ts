@@ -18,22 +18,27 @@ export function decodeKey(key: string, delimiter: string = "!"): string[] {
   return key.split(delimiter);
 }
 export const Chains = [
-  { chainId: 1, name: "Ethereum Mainnet", currency: "ETH" },
+  { chainId: 1, name: "Ethereum Mainnet", currency: "ETH", shortName: "eth" },
   // { chainId: 3, name: "Ropsten Testnet", currency: "ETH" },
   // { chainId: 4, name: "Rinkeby Testnet", currency: "ETH" },
   // { chainId: 5, name: "Goerli Testnet", currency: "ETH" },
   // { chainId: 42, name: "Kovan Testnet", currency: "ETH" },
   // { chainId: 56, name: "Binance Smart Chain Mainnet", currency: "BNB" },
   // { chainId: 97, name: "Binance Smart Chain Testnet", currency: "BNB" },
-  { chainId: 137, name: "Polygon Mainnet", currency: "MATIC" },
+  {
+    chainId: 137,
+    name: "Polygon Mainnet",
+    currency: "MATIC",
+    shortName: "matic",
+  },
   // { chainId: 80001, name: "Mumbai Testnet", currency: "MATIC" },
   // { chainId: 43114, name: "Avalanche Mainnet", currency: "AVAX" },
   // { chainId: 43113, name: "Avalanche Fuji Testnet", currency: "AVAX" },
   // { chainId: 250, name: "Fantom Opera", currency: "FTM" },
   // { chainId: 4002, name: "Fantom Testnet", currency: "FTM" },
-  { chainId: 42161, name: "Arbitrum One", currency: "ETH" },
+  { chainId: 42161, name: "Arbitrum One", currency: "ETH", shortName: "arbi" },
   // { chainId: 421611, name: "Arbitrum Rinkeby", currency: "ETH" },
-  { chainId: 10, name: "Optimism", currency: "ETH" },
+  { chainId: 10, name: "Optimism", currency: "ETH", shortName: "oeth" },
   // { chainId: 69, name: "Optimism Kovan", currency: "ETH" },
   // { chainId: 100, name: "xDai Chain", currency: "xDAI" },
   // { chainId: 77, name: "POA Network Sokol", currency: "POA" },
@@ -49,20 +54,20 @@ export const Chains = [
   // { chainId: 1287, name: "Moonbase Alpha", currency: "DEV" },
   // { chainId: 1663, name: "Metis Andromeda", currency: "METIS" },
   // { chainId: 1088, name: "Metis Stardust", currency: "METIS" },
-  { chainId: 8453, name: "Base Mainnet", currency: "ETH" },
+  { chainId: 8453, name: "Base Mainnet", currency: "ETH", shortName: "base" },
   // { chainId: 84531, name: "Base Goerli Testnet", currency: "ETH" },
 ];
 
 export function mapChainsById(): Record<
   number,
-  { name: string; currency: string }
+  { name: string; currency: string; shortName: string }
 > {
   return Chains.reduce(
-    (acc, { chainId, name, currency }) => {
-      acc[chainId] = { name, currency };
+    (acc, { chainId, name, currency, shortName }) => {
+      acc[chainId] = { name, currency, shortName };
       return acc;
     },
-    {} as Record<number, { name: string; currency: string }>,
+    {} as Record<number, { name: string; currency: string; shortName: string }>,
   );
 }
 

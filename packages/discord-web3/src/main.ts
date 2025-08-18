@@ -1,4 +1,3 @@
-// TODO: customize notification message?
 // TODO: When listing addresses, make it look nicer
 // TODO: add role that can manage addresses (other than admin)
 // TODO: Add filter by user for missing address
@@ -12,7 +11,31 @@
 // TODO: public facing docs, website
 // TODO: docs for people to setup and test on their own
 
-// TODO: Generate safe transactions
+// TODO: support multiple tokens per chain
+// TODO: query token information when custom tokens are added
+
+// DONE: Add empty value column to exports
+// DONE: support different csv delimiters
+// DONE: Add tdonation for disperse
+// DONE: add emojis to the output messages
+// DONE: Add token symbol to end of donation thank you message
+// DONE: add ability to add token types
+// DONE: add donate option for safe
+// DONE: Fix safe prefixes
+// DONE: ability to remove safe address
+// DONE: remove network option from delete, and lookup network from address
+// DONE: store safe address should be admin only
+// DONE: Admin can stOore safe address as regular addresses, they show up as autocomplete when exporting safe, must be excluded when doing an export
+// DONE: filter addresses when doing set_address to prevent autocomplete from taking over
+// DONE: unable to override address, must delete first. should be able to update with out delete
+// DONE: when erroring no address found, show user name rather than user id
+// DONE: remove dispere export from safe payout and move into its own command
+// DONE: move disperse export into its own command
+// DONE: when showing safe export, also show network and token along with total amount
+// Done: look into  dispoerse vs smold
+// DONE: split up export csv into discord id, display name, unique name, make headers match columns
+// DONE: when removing an address, narrow address results if network is selected
+// DONE: Generate safe transactions
 // DONE: Import csv to generate safe tx
 // DONE: Ability to send amounts per user
 // DONE: Make addresses defined per guild
@@ -20,6 +43,7 @@
 // DONE: Remove redundant text for add address notification: https://discord.com/channels/1035162791302139935/1311408790083469343/1369228478120988733
 import dotenv from "dotenv";
 import {
+  User,
   Client,
   GatewayIntentBits,
   REST,
@@ -143,6 +167,18 @@ const safeGenerations: Record<
     safeAddress: string;
     tokenAddress: string;
     decimals: number;
+    tokenName?: string;
+    tokenSymbol?: string;
+    donateAmount: number;
+  }
+> = {};
+
+const dispersePayouts: Record<
+  string,
+  {
+    id: string;
+    chainId: number;
+    donateAmount: number;
   }
 > = {};
 
@@ -208,18 +244,6 @@ export function main(): void {
       new SlashCommandBuilder()
         .setName("remove_address")
         .setDescription("Removes the address for a specific network")
-        .addIntegerOption((option) =>
-          option
-            .setName("network")
-            .setDescription("The network")
-            .setRequired(true)
-            .addChoices(
-              ...Chains.map((chain) => ({
-                name: chain.name,
-                value: chain.chainId,
-              })),
-            ),
-        )
         .addStringOption(
           (option) =>
             option
@@ -340,16 +364,95 @@ export function main(): void {
             .setRequired(false),
         )
         .toJSON(),
-      // New admin_safe_payout command
+      // Updated admin_safe_payout command
       new SlashCommandBuilder()
         .setName("admin_safe_payout")
         .setDescription(
           "Prepare a Safe payout CSV for a given network and token (Admin only)",
         )
+        .addStringOption(
+          (option) =>
+            option
+              .setName("safe_address")
+              .setDescription("The Safe address in network:address format")
+              .setRequired(true)
+              .setAutocomplete(true), // Enable autocomplete for the safe address field
+        )
+        .addStringOption((option) =>
+          option
+            .setName("token_address")
+            .setDescription("The token contract address to submit payout for")
+            .setRequired(true)
+            .setAutocomplete(true),
+        )
+        .addNumberOption((option) =>
+          option
+            .setName("donate_amount")
+            .setDescription(
+              "Add a Nudl donation amount to this transaction using the same token.",
+            )
+            .setRequired(true),
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_disperse_payout")
+        .setDescription("Disperse a payout to users (Admin only)")
         .addIntegerOption((option) =>
           option
             .setName("network")
-            .setDescription("The network to submit payout for")
+            .setDescription("The network to disperse payout for")
+            .setRequired(true)
+            .addChoices(
+              ...Chains.map((chain) => ({
+                name: chain.name,
+                value: chain.chainId,
+              })),
+            ),
+        )
+        .addNumberOption((option) =>
+          option
+            .setName("donate_amount")
+            .setDescription(
+              "Add a Nudl donation amount to this transaction using the same token.",
+            )
+            .setRequired(true),
+        )
+        // .addNumberOption((option) =>
+        //   option
+        //     .setName("donate_amount")
+        //     .setDescription("Add a donation amount and address to the transaction which goes to this bots creators.")
+        // )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_set_safe_address")
+        .setDescription("Saves a Safe address for the current guild")
+        .addStringOption((option) =>
+          option
+            .setName("safe_address")
+            .setDescription("The Safe address in network:address format")
+            .setRequired(true),
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_remove_safe_address")
+        .setDescription("Removes a Safe address for the current guild")
+        .addStringOption((option) =>
+          option
+            .setName("safe_address")
+            .setDescription(
+              "The Safe address to remove in network:address format",
+            )
+            .setRequired(true)
+            .setAutocomplete(true),
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_add_token")
+        .setDescription("Adds a token for a specific network (Admin only)")
+        .addIntegerOption((option) =>
+          option
+            .setName("network")
+            .setDescription("The network")
             .setRequired(true)
             .addChoices(
               ...Chains.map((chain) => ({
@@ -361,14 +464,21 @@ export function main(): void {
         .addStringOption((option) =>
           option
             .setName("token_address")
-            .setDescription("The token contract address to submit payout for")
+            .setDescription("The token contract address to add")
             .setRequired(true),
         )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_remove_token")
+        .setDescription("Removes a token for a specific network (Admin only)")
         .addStringOption((option) =>
           option
-            .setName("safe_address")
-            .setDescription("The Safe address to payout from")
-            .setRequired(true),
+            .setName("token_address")
+            .setDescription(
+              "The token address to remove in network:address format",
+            )
+            .setRequired(true)
+            .setAutocomplete(true),
         )
         .toJSON(),
     ];
@@ -412,7 +522,16 @@ export function main(): void {
         } else if (commandName === "set_address") {
           if (interaction.isChatInputCommand()) {
             const network = interaction.options.getInteger("network", true);
-            const address = interaction.options.getString("address", true);
+            const networkAddress = interaction.options.getString(
+              "address",
+              true,
+            );
+            console.log({ network, networkAddress });
+            let address = networkAddress;
+            if (networkAddress.includes(":")) {
+              address = networkAddress.split(":")[1];
+            }
+            assert(address, "Please provide an address");
             const userId = interaction.user.id;
             const guildId = interaction.guildId!;
             await userStore.setAddress(userId, guildId, network, address);
@@ -425,14 +544,19 @@ export function main(): void {
           }
         } else if (commandName === "remove_address") {
           if (interaction.isChatInputCommand()) {
-            const network = interaction.options.getInteger("network", true);
+            const networkAddress = interaction.options.getString(
+              "address",
+              true,
+            );
             const userId = interaction.user.id;
             const guildId = interaction.guildId!;
-            const chain = ChainsById[network];
+            const [chainId, address] = networkAddress.split(":");
+            assert(chainId, "Unable to find chain id");
+            const chain = ChainsById[Number(chainId)];
             const chainName = chain ? chain.name : "Unknown Chain";
-            await userStore.deleteAddress(userId, guildId, network); // Assuming delete method exists
+            await userStore.deleteAddress(userId, guildId, Number(chainId)); // Assuming delete method exists
             await interaction.reply({
-              content: `Address removed for ${chainName} (${network}).`,
+              content: `Address ${address} removed for ${chainName} (${chainId}).`,
               ephemeral: true,
             });
           }
@@ -764,13 +888,14 @@ export function main(): void {
                 ) => {
                   const chain = ChainsById[chainId];
                   const chainName = chain ? chain.name : "Unknown Chain";
-                  return `${index + 1}. ${displayName}(${username}) ${chainName}(${chainId}) ${address}`;
+                  return `${index + 1},${displayName},${username},${userId},${chainName},${chainId},${address}`;
                 },
               )
               .join("\n");
             if (exportToFile) {
               const csvContent =
-                "Index,Display Name,User ID,Address,Chain\n" + addressList;
+                "Index,Display Name,Unique Name,User ID,Chain Name,Chain Id,Address,Value\n" +
+                addressList;
               const buffer = Buffer.from(csvContent, "utf-8");
               await interaction.reply({
                 content: `All addresses have been exported as a CSV file.`,
@@ -811,7 +936,7 @@ export function main(): void {
             });
           }
         } else if (commandName === "admin_safe_payout") {
-          // New command logic
+          // Updated command logic
           if (
             !interaction.memberPermissions?.has(
               PermissionsBitField.Flags.Administrator,
@@ -825,16 +950,51 @@ export function main(): void {
           }
 
           if (interaction.isChatInputCommand()) {
-            const chainId = interaction.options.getInteger("network", true);
-            const tokenAddress = interaction.options.getString(
+            const tokenAddressInput = interaction.options.getString(
               "token_address",
               true,
             );
-            const safeAddress = interaction.options.getString(
+            const safeAddressInput = interaction.options.getString(
               "safe_address",
               true,
             );
-            const networkName = ChainsById[chainId]?.name || "Unknown Network";
+            const donateAmount =
+              interaction.options.getNumber("donate_amount") ?? 0;
+            const [networkPrefix, safeAddress] = safeAddressInput.split(":");
+            const chain = Chains.find(
+              (chain) =>
+                chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
+            );
+            if (!chain) {
+              await interaction.reply({
+                content: `Invalid network prefix: ${networkPrefix}`,
+                ephemeral: true,
+              });
+              return;
+            }
+            let tokenAddress = tokenAddressInput;
+            if (tokenAddressInput.includes(":")) {
+              const [tokenNetworkPrefix, maybeTokenAddress] =
+                tokenAddressInput.split(":");
+              const chain = Chains.find(
+                (chain) =>
+                  chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
+              );
+              if (!chain) {
+                await interaction.reply({
+                  content: `Invalid network prefix for token: ${networkPrefix}`,
+                  ephemeral: true,
+                });
+                return;
+              }
+              assert(
+                tokenNetworkPrefix === networkPrefix,
+                "Token network must match safe network",
+              );
+              tokenAddress = maybeTokenAddress;
+            }
+            const chainId = chain.chainId;
+            const networkName = chain.name;
             const viemChain = getViemChain(chainId);
 
             assert(viemChain, `Chain ${chainId} not found`);
@@ -851,12 +1011,6 @@ export function main(): void {
               erc20.read.symbol(),
               erc20.read.decimals(),
             ]);
-            console.log(commandName, {
-              chainId,
-              tokenAddress,
-              safeAddress,
-              networkName,
-            });
             // Show instructions and a button to open the modal
             const instructions = [
               `**Safe Payout Preparation**`,
@@ -869,7 +1023,7 @@ export function main(): void {
               ``,
               `Please click the button below to paste your CSV data.`,
               `The CSV should be in the format:`,
-              `\`discordid,amount\` (one per line)`,
+              `\`discordid OR unique name OR display name,amount\` (one per line)`,
               ``,
               `After submitting, you will receive a file to download.`,
             ].join("\n");
@@ -881,6 +1035,9 @@ export function main(): void {
               safeAddress,
               tokenAddress,
               decimals,
+              tokenName: name,
+              tokenSymbol: symbol,
+              donateAmount,
             };
             const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
               new ButtonBuilder()
@@ -892,6 +1049,203 @@ export function main(): void {
             await interaction.reply({
               content: instructions,
               components: [button],
+              ephemeral: true,
+            });
+          }
+        } else if (commandName === "admin_disperse_payout") {
+          // New command logic for disperse payout
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator,
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (interaction.isChatInputCommand()) {
+            const chainId = interaction.options.getInteger("network", true);
+            const networkName = ChainsById[chainId]?.name || "Unknown Network";
+            const donateAmount =
+              interaction.options.getNumber("donate_amount") ?? 0;
+
+            const instructions = [
+              `**Disperse Payout Preparation**`,
+              `Network: \`${networkName}\``,
+              ``,
+              `Please click the button below to paste your CSV data.`,
+              `The CSV should be in the format:`,
+              `\`discordid OR unique name OR display name,amount\` (one per line)`,
+              ``,
+              `After submitting, you will receive a CSV file to download.`,
+            ].join("\n");
+
+            const disperseId = getId();
+            const dispersePayout = {
+              id: disperseId,
+              chainId,
+              donateAmount,
+            };
+            dispersePayouts[disperseId] = dispersePayout;
+            const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`dispersePayoutModal_${disperseId}`)
+                .setLabel("Paste CSV Data")
+                .setStyle(ButtonStyle.Primary),
+            );
+
+            await interaction.reply({
+              content: instructions,
+              components: [button],
+              ephemeral: true,
+            });
+          }
+        } else if (commandName === "admin_set_safe_address") {
+          // Updated command logic
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator,
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+          if (interaction.isChatInputCommand()) {
+            const safeAddressInput = interaction.options.getString(
+              "safe_address",
+              true,
+            );
+            const [networkPrefix, address] = safeAddressInput.split(":");
+            const chain = Chains.find(
+              (chain) =>
+                chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
+            );
+            if (!chain) {
+              await interaction.reply({
+                content: `Invalid network prefix: ${networkPrefix}`,
+                ephemeral: true,
+              });
+              return;
+            }
+            const guildId = interaction.guildId!;
+            await userStore.setAddress(
+              guildId,
+              guildId,
+              chain.chainId,
+              address,
+            );
+            await interaction.reply({
+              content: `Safe address stored for ${chain.name} (${chain.chainId}): ${address}`,
+              ephemeral: true,
+            });
+          }
+        } else if (commandName === "admin_remove_safe_address") {
+          // New command logic for removing a safe address
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator,
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+          if (interaction.isChatInputCommand()) {
+            const safeAddressInput = interaction.options.getString(
+              "safe_address",
+              true,
+            );
+            const [networkPrefix, address] = safeAddressInput.split(":");
+            const chain = Chains.find(
+              (chain) =>
+                chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
+            );
+            if (!chain) {
+              await interaction.reply({
+                content: `Invalid network prefix: ${networkPrefix}`,
+                ephemeral: true,
+              });
+              return;
+            }
+            const guildId = interaction.guildId!;
+            await userStore.deleteAddress(guildId, guildId, chain.chainId); // Assuming delete method exists
+            await interaction.reply({
+              content: `Safe address removed for ${chain.name} (${chain.chainId}): ${address}`,
+              ephemeral: true,
+            });
+          }
+        } else if (commandName === "admin_add_token") {
+          // New command logic for adding a token
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator,
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+          if (interaction.isChatInputCommand()) {
+            const network = interaction.options.getInteger("network", true);
+            const tokenAddress = interaction.options.getString(
+              "token_address",
+              true,
+            );
+            const guildId = interaction.guildId!;
+            const userId = `${guildId}-token`;
+            await userStore.setAddress(userId, guildId, network, tokenAddress);
+            const chain = ChainsById[network];
+            const chainName = chain ? chain.name : "Unknown Chain";
+            await interaction.reply({
+              content: `Token address stored for ${chainName} (${network}): ${tokenAddress}`,
+              ephemeral: true,
+            });
+          }
+        } else if (commandName === "admin_remove_token") {
+          // New command logic for removing a token
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator,
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+          if (interaction.isChatInputCommand()) {
+            const tokenAddressInput = interaction.options.getString(
+              "token_address",
+              true,
+            );
+            const [networkPrefix, tokenAddress] = tokenAddressInput.split(":");
+            const chain = Chains.find(
+              (chain) =>
+                chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
+            );
+            if (!chain) {
+              await interaction.reply({
+                content: `Invalid network prefix: ${networkPrefix}`,
+                ephemeral: true,
+              });
+              return;
+            }
+            const guildId = interaction.guildId!;
+            const userId = `${guildId}-token`;
+            await userStore.deleteAddress(userId, guildId, chain.chainId); // Assuming delete method exists
+            await interaction.reply({
+              content: `Token address removed for ${chain.name} (${chain.chainId}): ${tokenAddress}`,
               ephemeral: true,
             });
           }
@@ -916,19 +1270,118 @@ export function main(): void {
         const userId = interaction.user.id;
         const guildId = interaction.guildId!;
         const userAddresses = await userStore.getUser(userId, guildId);
-        // TODO: need to filter out other addresses if user input doesnt match
-        const userInput = interaction.options.getString("filter", false) || "";
-        const choices = userAddresses
-          .filter(({ address }) => address.includes(userInput))
-          .map(({ chainId, address }) => {
-            const chain = ChainsById[chainId];
-            const chainName = chain ? chain.name : "Unknown Chain";
-            return {
-              name: `${chainName} (${chainId}): ${address}`,
-              value: address,
-            };
-          });
-        await interaction.respond(choices);
+
+        // Check if a network option is set
+        const networkOption = interaction.options.get("network");
+        let filteredAddresses = userAddresses;
+
+        if (networkOption?.value) {
+          const selectedNetwork = Number(networkOption.value);
+          filteredAddresses = userAddresses.filter(
+            ({ chainId }) => chainId === selectedNetwork,
+          );
+        }
+
+        const userInput = interaction.options.getString("address", false) || "";
+        let maybeAddress: string | undefined;
+        if (userInput) {
+          maybeAddress = userInput.split(":")[1];
+        }
+
+        if (maybeAddress) {
+          // Filter addresses based on user input, assuming input is the start of the address
+          filteredAddresses = filteredAddresses.filter(({ address }) =>
+            address.toLowerCase().startsWith(maybeAddress.toLowerCase()),
+          );
+        }
+
+        const choices = filteredAddresses.map(({ chainId, address }) => {
+          const chain = ChainsById[chainId];
+          const chainName = chain ? chain.name : "Unknown Chain";
+          return {
+            name: `${chainName} (${chainId}): ${address}`,
+            value: `${chainId}:${address}`,
+          };
+        });
+
+        try {
+          await interaction.respond(choices);
+        } catch (err) {
+          console.error(err, "Error autocomplete address");
+        }
+      } else if (focusedOption.name === "safe_address") {
+        const guildId = interaction.guildId!;
+        let safeAddresses = await userStore.getUser(guildId, guildId);
+
+        const userInput =
+          interaction.options.getString("safe_address", false) || "";
+        const [inputNetwork, inputAddress] = userInput.split(":");
+        safeAddresses = safeAddresses.filter(({ chainId, address }) => {
+          const chain = ChainsById[chainId];
+          const chainName = chain ? chain.name.toLowerCase() : "";
+
+          const matchesNetwork = inputNetwork
+            ? chainName.startsWith(inputNetwork.toLowerCase())
+            : true;
+
+          const matchesAddress = inputAddress
+            ? address.toLowerCase().startsWith(inputAddress.toLowerCase())
+            : true;
+
+          return matchesNetwork && matchesAddress;
+        });
+
+        const choices = safeAddresses.map(({ chainId, address }) => {
+          const chain = ChainsById[chainId];
+          const chainName = chain ? chain.name : "Unknown Chain";
+          return {
+            name: `${chainName}:${address}`,
+            value: `${chain.shortName}:${address}`,
+          };
+        });
+
+        try {
+          await interaction.respond(choices);
+        } catch (err) {
+          console.error(err, "Error autocomplete safe address");
+        }
+      } else if (focusedOption.name === "token_address") {
+        const guildId = interaction.guildId!;
+        const userId = `${guildId}-token`;
+        let tokenAddresses = await userStore.getUser(userId, guildId);
+
+        const userInput =
+          interaction.options.getString("token_address", false) || "";
+        const [inputNetwork, inputAddress] = userInput.split(":");
+        tokenAddresses = tokenAddresses.filter(({ chainId, address }) => {
+          const chain = ChainsById[chainId];
+          const chainName = chain ? chain.name.toLowerCase() : "";
+
+          const matchesNetwork = inputNetwork
+            ? chainName.startsWith(inputNetwork.toLowerCase())
+            : true;
+
+          const matchesAddress = inputAddress
+            ? address.toLowerCase().startsWith(inputAddress.toLowerCase())
+            : true;
+
+          return matchesNetwork && matchesAddress;
+        });
+
+        const choices = tokenAddresses.map(({ chainId, address }) => {
+          const chain = ChainsById[chainId];
+          const chainName = chain ? chain.name : "Unknown Chain";
+          return {
+            name: `${chainName}:${address}`,
+            value: `${chain.shortName}:${address}`,
+          };
+        });
+
+        try {
+          await interaction.respond(choices);
+        } catch (err) {
+          console.error(err, "Error autocomplete token address");
+        }
       }
     } else if (interaction.isModalSubmit()) {
       try {
@@ -970,10 +1423,14 @@ export function main(): void {
           const errors: string[] = [];
           const userIdToAmount: Record<string, string> = {};
           const idToInput: Record<string, string> = {};
+          const userIdToUser: Record<string, User> = {};
 
           // 1. Resolve Discord users
           for (let i = 0; i < lines.length; i++) {
-            const [idRaw, amountRaw] = lines[i].split(",").map((s) => s.trim());
+            const [idRaw, amountRaw] = lines[i]
+              .split(/[\t,= ]/)
+              .map((s) => s.trim());
+
             if (!idRaw || !amountRaw) {
               errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);
               continue;
@@ -990,6 +1447,7 @@ export function main(): void {
                 continue;
               }
               userIdToAmount[user.id] = amountRaw;
+              userIdToUser[user.id] = user;
             } catch (e) {
               errors.push(`Line ${i + 1}: Error resolving user "${idRaw}"`);
               continue;
@@ -1007,16 +1465,35 @@ export function main(): void {
                 safeData.chainId,
               );
               if (!address) {
+                const user = userIdToUser[userId];
+                const userInfo = user
+                  ? `${user.username}#${user.discriminator} (${user.id})`
+                  : `User ID: ${userId}`;
                 errors.push(
-                  `User ${userId}: No address found for chain ${safeData.chainId}`,
+                  `${userInfo}: No address found for chain ${safeData.chainId}`,
                 );
                 continue;
               }
               addressEntries.push([address, userIdToAmount[userId]]);
             } catch (e) {
-              errors.push(`User ${userId}: Error looking up address`);
+              const user = userIdToUser[userId];
+              const userInfo = user
+                ? `${user.username}#${user.discriminator} (${user.id})`
+                : `User ID: ${userId}`;
+              errors.push(`${userInfo}: Error looking up address`);
               continue;
             }
+          }
+          if (
+            process.env.DONATE_ADDRESS &&
+            viem.isAddress(process.env.DONATE_ADDRESS) &&
+            safeData.donateAmount &&
+            safeData.donateAmount > 0
+          ) {
+            addressEntries.push([
+              process.env.DONATE_ADDRESS,
+              safeData.donateAmount.toString(),
+            ]);
           }
 
           // 3. Generate Safe transaction batch
@@ -1042,10 +1519,127 @@ export function main(): void {
               attachment: Buffer.from(batchJson, "utf-8"),
             },
           ];
-          let content = `✅ Safe transaction batch generated for ${addressEntries.length} entries.`;
-          content += `\nTotal amount: ${batchResult.totalAmountFormatted}`;
+          const chainName =
+            ChainsById[safeData.chainId]?.name ?? "Unknown Chain";
+          const tokenName = safeData.tokenName ?? "Unknown Token";
+          const tokenSymbol = safeData.tokenSymbol ?? "Unknown Token Symbol";
+          let content = `✅ SAFE JSON file generated for ${addressEntries.length} entries on ${chainName} using ${tokenName} (${tokenSymbol}).`;
+          if (safeData.donateAmount > 0)
+            content += `\nYou are donating ${safeData.donateAmount.toFixed(4)} ${tokenSymbol}, thank you! ❤️`;
+          content += `\n💸 ___Total amount to transfer___: **${batchResult.totalAmountFormatted} ${tokenSymbol}**`;
           if (allErrors.length > 0) {
             content += `\n\n⚠️ Some issues were found:\n\`\`\`\n${allErrors.join("\n")}\n\`\`\``;
+          }
+          await interaction.editReply({
+            content,
+            files,
+          });
+        } else if (interaction.customId.startsWith("dispersePayoutModal_")) {
+          await interaction.deferReply({ ephemeral: true });
+          // Modal submit for admin_disperse_payout
+          const [_, disperseId] = interaction.customId.split("_");
+          const payoutData = dispersePayouts[disperseId];
+          assert(payoutData, "Unable to find original request, try again");
+          const { chainId, donateAmount } = payoutData;
+          const csvData = interaction.fields.getTextInputValue("csvInput");
+          // Parse CSV lines into [id, amount] pairs
+          const lines = csvData
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+          const errors: string[] = [];
+          const userIdToAmount: Record<string, string> = {};
+          const userIdToUser: Record<string, User> = {};
+          // 1. Resolve Discord users
+          for (let i = 0; i < lines.length; i++) {
+            const [idRaw, amountRaw] = lines[i]
+              .split(/[\t,= ]/)
+              .map((s) => s.trim());
+            if (!idRaw || !amountRaw) {
+              errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);
+              continue;
+            }
+            try {
+              const user = await resolveDiscordUser(
+                client,
+                idRaw,
+                interaction.guildId!,
+              );
+              if (!user) {
+                errors.push(`Line ${i + 1}: Could not resolve user "${idRaw}"`);
+                continue;
+              }
+              userIdToAmount[user.id] = amountRaw;
+              userIdToUser[user.id] = user;
+            } catch (e) {
+              errors.push(`Line ${i + 1}: Error resolving user "${idRaw}"`);
+              continue;
+            }
+          }
+
+          // 2. Lookup addresses for resolved users
+          const addressEntries: Array<[string, string]> = [];
+          for (const userId in userIdToAmount) {
+            const user = userIdToUser[userId];
+            const userDisplayName = user ? user.username : "Unknown";
+            const userUniqueName = user
+              ? `${user.username}#${user.discriminator}`
+              : "Unknown#0000";
+            try {
+              const address = await userStore.getAddress(
+                userId,
+                interaction.guildId!,
+                chainId,
+              );
+              if (!address) {
+                errors.push(
+                  `User ${userId} (${userDisplayName}, ${userUniqueName}): No address found for chain ${chainId}`,
+                );
+                continue;
+              }
+              addressEntries.push([address, userIdToAmount[userId]]);
+            } catch (e) {
+              errors.push(
+                `User ${userId} (${userDisplayName}, ${userUniqueName}): Error looking up address`,
+              );
+              continue;
+            }
+          }
+          const DONATE_ADDRESS = process.env.DONATE_ADDRESS;
+          const hasDonation = donateAmount > 0 && DONATE_ADDRESS;
+          if (hasDonation) {
+            addressEntries.push([DONATE_ADDRESS, donateAmount.toString()]);
+          }
+
+          // 3. Prepare CSV content
+          const csvContent = [
+            "receiverAddress,value",
+            ...addressEntries.map(
+              ([address, amount]) => `${address},${amount}`,
+            ),
+          ].join("\n");
+
+          // 4. Reply to user with results
+          const now = new Date();
+          const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+          const files = [
+            {
+              name: `disperse_${dateStr}.csv`,
+              attachment: Buffer.from(csvContent, "utf-8"),
+            },
+          ];
+          const chainName = ChainsById[chainId]?.name ?? "Unknown Chain";
+          let totalAmount = addressEntries.reduce(
+            (acc, [, amount]) => acc + parseFloat(amount),
+            0,
+          );
+          let content = `✅ Disperse CSV generated for ${addressEntries.length} entries on ${chainName} (${chainId}).`;
+          if (hasDonation)
+            content += `\nYou are donating ${donateAmount.toFixed(4)}, thank you! ❤️`;
+          content += `\n💸 ___Total amount to transfer___: **${totalAmount}**`;
+          if (errors.length > 0) {
+            content += `\n\n⚠️ Some issues were found:\n\`\`\`\n${errors.join("\n")}\n\`\`\``;
           }
           await interaction.editReply({
             content,
@@ -1091,7 +1685,6 @@ export function main(): void {
           guildId,
           network,
         );
-        console.log({ userId, guildId, network, existingAddress });
         if (existingAddress) {
           await interaction.reply({
             content: `You already have an address set for this network: ${existingAddress}`,
@@ -1201,6 +1794,25 @@ export function main(): void {
         const modal = new ModalBuilder()
           .setCustomId(`safePayoutModal_${safeId}`)
           .setTitle("Paste Safe Payout CSV");
+
+        const input = new TextInputBuilder()
+          .setCustomId("csvInput")
+          .setLabel("Paste CSV (discordid,amount per line)")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true);
+
+        const actionRow =
+          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
+      } else if (interaction.customId.startsWith("dispersePayoutModal_")) {
+        const [_, disperseId, chainIdStr] = interaction.customId.split("_");
+        const chainId = parseInt(chainIdStr, 10);
+
+        const modal = new ModalBuilder()
+          .setCustomId(`dispersePayoutModal_${disperseId}_${chainId}`)
+          .setTitle("Paste Disperse Payout CSV");
 
         const input = new TextInputBuilder()
           .setCustomId("csvInput")
