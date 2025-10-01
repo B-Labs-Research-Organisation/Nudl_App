@@ -1,4 +1,3 @@
-// TODO: When listing addresses, make it look nicer
 // TODO: add role that can manage addresses (other than admin)
 // TODO: Add filter by user for missing address
 // TODO: export missing adddress users option
@@ -10,10 +9,28 @@
 // TODO: verify ownership of wallet addresses, guild or collabland?
 // TODO: public facing docs, website
 // TODO: docs for people to setup and test on their own
+// TODO: improve rendering of listing token data,
+// TODO: imporve user list addresse
 
-// TODO: support multiple tokens per chain
-// TODO: query token information when custom tokens are added
+// TODO: look into csv airdrop format for nft and native token
+// TODO: expose api
+// TODO: file upload discord for csv
 
+// DONE: Show profile for user with user selection
+// DONE: remove repetitiveness from search_address, group same user together, maybe share display from search user
+
+// DONE: Search by address to find user on network /admin_search some kind of profile
+// DONE: Make donation optional
+// DONE: clear up donation doc: donate to the nudl project
+// DONE: change safe prfix error to make it more clear
+// DONE: Look into how to submt tx to safe
+// DONE: unable to overwrite addresses
+// DONE: improve admin list addresses
+// DONE: setting addresses no longer shows addresses when listing
+// DONE: fix auto seeding
+// DONE: list or adding addresses doesnt work
+// DONE: support multiple tokens per chain
+// DONE: query token information when custom tokens are added
 // DONE: Add empty value column to exports
 // DONE: support different csv delimiters
 // DONE: Add tdonation for disperse
@@ -60,9 +77,11 @@ import {
   ButtonBuilder,
   ButtonStyle,
   TextChannel,
+  Utils,
+  GuildMember,
 } from "discord.js";
 import * as viem from "viem";
-import { Users, Store, RedisStore, MapStore } from "./models"; // Import the User function
+import { Users, Store, RedisStore, MapStore, Tokens } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import { Api } from "./api";
 import {
@@ -73,11 +92,15 @@ import {
   getViemChain,
   resolveDiscordUser,
   generateSafeTransactionBatch,
+  renderUser,
+  renderUsers,
+  ChainSummary,
 } from "./utils";
 import { Service as RouterService } from "./router";
 import { createClient } from "redis";
 import assert from "assert";
 import ERC20_ABI from "./erc20.abi";
+import _ from "lodash";
 
 dotenv.config();
 
@@ -116,6 +139,11 @@ const fakeEthAddresses = [
     chainId: 137,
     address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
     userId: "573155442226757653",
+  },
+  {
+    chainId: 137,
+    address: "0x0A24193E3D1B7a0663FF124A1505A09E921C60C0",
+    userId: "1015930607638949888",
   },
   {
     chainId: 42161,
@@ -182,6 +210,21 @@ const dispersePayouts: Record<
   }
 > = {};
 
+const csvAirdropPayouts: Record<
+  string,
+  {
+    id: string;
+    type: string;
+    chainId: number;
+    tokenName: string;
+    tokenSymbol: string;
+    tokenAddress: string;
+    decimals: number;
+    donateAmount: number;
+    tokenId?: number;
+  }
+> = {};
+
 export function main(): void {
   const client = new Client({
     intents: [
@@ -190,17 +233,22 @@ export function main(): void {
     ],
   });
 
-  let store: Store<string, string>;
+  let userStore: Store<string, string>;
+  let tokenStore: Store<string, string>;
 
   if (process.env.REDIS_URL) {
     const redisClient = createClient({ url: process.env.REDIS_URL });
     redisClient.connect();
-    store = new RedisStore(redisClient, "discord-web3");
+    userStore = new RedisStore(redisClient, "discord-web3");
+    tokenStore = new RedisStore(redisClient, "discord-web3-tokens");
   } else {
-    store = new MapStore();
+    userStore = new MapStore();
+    tokenStore = new MapStore();
   }
 
-  const userStore = Users(store); // Initialize the user store
+  const userModel = Users(userStore); // Initialize the user store
+  const safeStore = Users(userStore); // Initialize the user store
+  const tokenModel = Tokens(tokenStore); // Initialize the user store
 
   client.once("ready", async () => {
     console.log("Discord client is ready!");
@@ -389,9 +437,9 @@ export function main(): void {
           option
             .setName("donate_amount")
             .setDescription(
-              "Add a Nudl donation amount to this transaction using the same token.",
+              "Donate tokens to the Nudl project in this transaction using the same token.",
             )
-            .setRequired(true),
+            .setRequired(false),
         )
         .toJSON(),
       new SlashCommandBuilder()
@@ -413,15 +461,41 @@ export function main(): void {
           option
             .setName("donate_amount")
             .setDescription(
-              "Add a Nudl donation amount to this transaction using the same token.",
+              "Donate tokens to the Nudl project in this transaction using the same token.",
             )
-            .setRequired(true),
+            .setRequired(false),
         )
-        // .addNumberOption((option) =>
-        //   option
-        //     .setName("donate_amount")
-        //     .setDescription("Add a donation amount and address to the transaction which goes to this bots creators.")
-        // )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_csv_airdrop_payout")
+        .setDescription("CSV Airdrop payout file (Admin only)")
+        .addIntegerOption((option) =>
+          option
+            .setName("network")
+            .setDescription("The network they payout for")
+            .setRequired(true)
+            .addChoices(
+              ...Chains.map((chain) => ({
+                name: chain.name,
+                value: chain.chainId,
+              })),
+            ),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("token_address")
+            .setDescription("The token contract address to submit payout for")
+            .setRequired(true)
+            .setAutocomplete(true),
+        )
+        .addNumberOption((option) =>
+          option
+            .setName("donate_amount")
+            .setDescription(
+              "Donate tokens to the Nudl project in this transaction using the same token.",
+            )
+            .setRequired(false),
+        )
         .toJSON(),
       new SlashCommandBuilder()
         .setName("admin_set_safe_address")
@@ -447,8 +521,8 @@ export function main(): void {
         )
         .toJSON(),
       new SlashCommandBuilder()
-        .setName("admin_add_token")
-        .setDescription("Adds a token for a specific network (Admin only)")
+        .setName("admin_set_token")
+        .setDescription("Add a token for a specific network (Admin only)")
         .addIntegerOption((option) =>
           option
             .setName("network")
@@ -479,6 +553,16 @@ export function main(): void {
             )
             .setRequired(true)
             .setAutocomplete(true),
+        )
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("admin_search_address")
+        .setDescription("Search for a user by their address (Admin only)")
+        .addStringOption((option) =>
+          option
+            .setName("address")
+            .setDescription("The address to search for")
+            .setRequired(true),
         )
         .toJSON(),
     ];
@@ -526,7 +610,7 @@ export function main(): void {
               "address",
               true,
             );
-            console.log({ network, networkAddress });
+            console.log("set_address", { network, networkAddress });
             let address = networkAddress;
             if (networkAddress.includes(":")) {
               address = networkAddress.split(":")[1];
@@ -534,7 +618,7 @@ export function main(): void {
             assert(address, "Please provide an address");
             const userId = interaction.user.id;
             const guildId = interaction.guildId!;
-            await userStore.setAddress(userId, guildId, network, address);
+            await userModel.setAddress(userId, guildId, network, address);
             const chain = ChainsById[network];
             const chainName = chain ? chain.name : "Unknown Chain";
             await interaction.reply({
@@ -554,7 +638,7 @@ export function main(): void {
             assert(chainId, "Unable to find chain id");
             const chain = ChainsById[Number(chainId)];
             const chainName = chain ? chain.name : "Unknown Chain";
-            await userStore.deleteAddress(userId, guildId, Number(chainId)); // Assuming delete method exists
+            await userModel.deleteAddress(userId, guildId, Number(chainId)); // Assuming delete method exists
             await interaction.reply({
               content: `Address ${address} removed for ${chainName} (${chainId}).`,
               ephemeral: true,
@@ -563,7 +647,7 @@ export function main(): void {
         } else if (commandName === "list_addresses") {
           const userId = interaction.user.id;
           const guildId = interaction.guildId!;
-          const userAddresses = await userStore.getUser(userId, guildId);
+          const userAddresses = await userModel.getUser(userId, guildId);
           if (userAddresses.length === 0) {
             await interaction.reply("No addresses set for any networks.");
           } else {
@@ -609,7 +693,7 @@ export function main(): void {
             }
             const guildId = guild.id;
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(
+            const allAddresses = await userModel.getUsersByChain(
               network,
               guildId,
             );
@@ -709,7 +793,7 @@ export function main(): void {
             }
             const guildId = guild.id;
             const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userStore.getUsersByChain(
+            const allAddresses = await userModel.getUsersByChain(
               network,
               guildId,
             );
@@ -810,6 +894,7 @@ export function main(): void {
 
             // Filter users based on optional filters
             let filteredUsers = Array.from(allDiscordUsers.values());
+            const allAddresses = await userModel.getAllAddresses(guild.id);
 
             if (user) {
               filteredUsers = filteredUsers.filter(
@@ -839,62 +924,84 @@ export function main(): void {
               );
             }
 
-            // Lookup to see if they have addresses set
-            const guildId = guild.id;
-            const userAddresses = await Promise.all(
-              filteredUsers.map(async (member) => {
-                const addresses =
-                  network !== null
-                    ? await userStore.getUsersByChain(network, guildId)
-                    : await userStore.getAllAddresses(guildId);
-                return addresses.filter((addr) => addr.userId === member.id);
-              }),
-            );
-
-            const flatUserAddresses = userAddresses.flat();
-
-            if (flatUserAddresses.length === 0) {
-              await interaction.reply({
-                content: user
-                  ? `No addresses found for user ${user.username}${network ? ` on network ${network}` : ""}.`
-                  : `No users with addresses found${network ? ` on network ${network}` : ""}.`,
-                ephemeral: true,
-              });
-              return;
+            let filteredAddresses = allAddresses;
+            if (network) {
+              filteredAddresses = filteredAddresses.filter(
+                ({ chainId }) => network === chainId,
+              );
             }
 
-            // Format the final results
-            const userPromises = flatUserAddresses.map(async (addr) => {
-              const discorduser = await client.users.fetch(addr.userId);
-              return {
-                userId: addr.userId,
-                displayName: discorduser.displayName,
-                username: discorduser.username,
-                address: addr.address,
-                chainId: addr.chainId,
-              };
+            const finalList: [
+              GuildMember,
+              { chain: ChainSummary; address: string }[],
+            ][] = filteredUsers
+              .filter((user) => {
+                return filteredAddresses.find(
+                  (addr) => addr.userId === user.id,
+                );
+              })
+              .map((user) => {
+                return [
+                  user,
+                  filteredAddresses
+                    .filter((addr) => addr.userId === user.id)
+                    .map((address) => {
+                      const chain = ChainsById[address.chainId];
+                      return {
+                        chain,
+                        address: address.address,
+                      };
+                    })
+                    .sort((a, b) => (a.chain.name < b.chain.name ? -1 : 1)),
+                ];
+              });
+
+            finalList.sort(([a], [b]) => {
+              return a.displayName.localeCompare(b.displayName);
             });
 
-            // TODO: show role in list
-            const userAddressList = await Promise.all(userPromises);
-            const sortedUserAddressList = userAddressList.sort((a, b) =>
-              a.displayName.localeCompare(b.displayName),
-            );
-            const addressList = sortedUserAddressList
+            const formattedResponse = renderUsers(finalList);
+
+            const addressList = finalList
+              .map(([user, data]) => {
+                return data.map(({ chain, address }) => {
+                  return {
+                    userId: user.id,
+                    displayName: user.displayName,
+                    address: address,
+                    chainId: chain.chainId,
+                    chainName: chain.name,
+                    username: user.user.tag,
+                  };
+                });
+              })
+              .flat()
               .map(
                 (
-                  { userId, displayName, address, chainId, username },
+                  {
+                    userId,
+                    displayName,
+                    address,
+                    chainId,
+                    username,
+                    chainName,
+                  },
                   index,
                 ) => {
-                  const chain = ChainsById[chainId];
-                  const chainName = chain ? chain.name : "Unknown Chain";
                   return `${index + 1},${displayName},${username},${userId},${chainName},${chainId},${address}`;
                 },
               )
               .join("\n");
+
+            if (formattedResponse.length === 0) {
+              return interaction.reply({
+                content: `No addresses found!`,
+                ephemeral: true,
+              });
+            }
             if (exportToFile) {
               const csvContent =
-                "Index,Display Name,Unique Name,User ID,Chain Name,Chain Id,Address,Value\n" +
+                "Index,Display_Name,Unique_Name,UserID,Chain_Name,Chain_Id,Address,Value\n" +
                 addressList;
               const buffer = Buffer.from(csvContent, "utf-8");
               await interaction.reply({
@@ -904,9 +1011,7 @@ export function main(): void {
               });
             } else {
               await interaction.reply({
-                content: user
-                  ? `Addresses for user ${user.username}:\n${addressList}`
-                  : `Addresses:\n${addressList}`,
+                content: formattedResponse,
                 ephemeral: true,
               });
             }
@@ -927,7 +1032,7 @@ export function main(): void {
 
             const guildId = interaction.guildId!;
             for (const { userId, chainId, address } of fakeEthAddresses) {
-              await userStore.setAddress(userId, guildId, chainId, address);
+              await userModel.setAddress(userId, guildId, chainId, address);
             }
 
             await interaction.reply({
@@ -967,7 +1072,7 @@ export function main(): void {
             );
             if (!chain) {
               await interaction.reply({
-                content: `Invalid network prefix: ${networkPrefix}`,
+                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
                 ephemeral: true,
               });
               return;
@@ -982,14 +1087,14 @@ export function main(): void {
               );
               if (!chain) {
                 await interaction.reply({
-                  content: `Invalid network prefix for token: ${networkPrefix}`,
+                  content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
                   ephemeral: true,
                 });
                 return;
               }
               assert(
                 tokenNetworkPrefix === networkPrefix,
-                "Token network must match safe network",
+                "Token network must match the safe network",
               );
               tokenAddress = maybeTokenAddress;
             }
@@ -1052,6 +1157,104 @@ export function main(): void {
               ephemeral: true,
             });
           }
+        } else if (commandName === "admin_csv_airdrop_payout") {
+          if (
+            !interaction.memberPermissions?.has(
+              PermissionsBitField.Flags.Administrator,
+            )
+          ) {
+            await interaction.reply({
+              content: "You do not have permission to use this command.",
+              ephemeral: true,
+            });
+            return;
+          }
+          if (!interaction.isChatInputCommand()) return;
+
+          const chainId = interaction.options.getInteger("network", true);
+          const chain = ChainsById[chainId];
+          assert(chain, "Network not found");
+          const donateAmount =
+            interaction.options.getNumber("donate_amount") ?? 0;
+          const token = interaction.options.getString("token_address", true);
+          const tokenAddressInput = interaction.options.getString(
+            "token_address",
+            true,
+          );
+          let tokenAddress = tokenAddressInput;
+          if (tokenAddressInput.includes(":")) {
+            const [tokenNetworkPrefix, maybeTokenAddress] =
+              tokenAddressInput.split(":");
+            const chain = Chains.find(
+              (chain) =>
+                chain.shortName.toLowerCase() ===
+                tokenNetworkPrefix.toLowerCase(),
+            );
+            if (!chain) {
+              await interaction.reply({
+                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
+                ephemeral: true,
+              });
+              return;
+            }
+            assert(
+              tokenNetworkPrefix === chain.shortName,
+              "Token network must match the safe network",
+            );
+            tokenAddress = maybeTokenAddress;
+          }
+
+          const instructions = [
+            `**CSV Airdrop (Safe plugin) Preparation**`,
+            `Network: \`${chain.name}\``,
+            ``,
+            `Please click the button below to paste your CSV data.`,
+            `The CSV should be in the format:`,
+            `\`discordid OR unique name OR display name,amount\` (one per line)`,
+            ``,
+            `After submitting, you will receive a CSV file to download.`,
+          ].join("\n");
+
+          const viemChain = getViemChain(chainId);
+
+          assert(viemChain, `Chain ${chainId} not found`);
+          const erc20 = viem.getContract({
+            address: viem.getAddress(tokenAddress),
+            abi: ERC20_ABI,
+            client: viem.createPublicClient({
+              chain: viemChain,
+              transport: viem.http(),
+            }),
+          });
+          const [name, symbol, decimals] = await Promise.all([
+            erc20.read.name(),
+            erc20.read.symbol(),
+            erc20.read.decimals(),
+          ]);
+          const id = getId();
+          const payout = {
+            id,
+            chainId,
+            donateAmount,
+            tokenAddress,
+            decimals,
+            tokenName: name,
+            tokenSymbol: symbol,
+            type: "erc20",
+          };
+          csvAirdropPayouts[id] = payout;
+          const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`dispersePayoutModal_${id}`)
+              .setLabel("Paste CSV Data")
+              .setStyle(ButtonStyle.Primary),
+          );
+
+          await interaction.reply({
+            content: instructions,
+            components: [button],
+            ephemeral: true,
+          });
         } else if (commandName === "admin_disperse_payout") {
           // New command logic for disperse payout
           if (
@@ -1128,13 +1331,13 @@ export function main(): void {
             );
             if (!chain) {
               await interaction.reply({
-                content: `Invalid network prefix: ${networkPrefix}`,
+                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
                 ephemeral: true,
               });
               return;
             }
             const guildId = interaction.guildId!;
-            await userStore.setAddress(
+            await userModel.setAddress(
               guildId,
               guildId,
               chain.chainId,
@@ -1170,19 +1373,19 @@ export function main(): void {
             );
             if (!chain) {
               await interaction.reply({
-                content: `Invalid network prefix: ${networkPrefix}`,
+                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
                 ephemeral: true,
               });
               return;
             }
             const guildId = interaction.guildId!;
-            await userStore.deleteAddress(guildId, guildId, chain.chainId); // Assuming delete method exists
+            await userModel.deleteAddress(guildId, guildId, chain.chainId); // Assuming delete method exists
             await interaction.reply({
               content: `Safe address removed for ${chain.name} (${chain.chainId}): ${address}`,
               ephemeral: true,
             });
           }
-        } else if (commandName === "admin_add_token") {
+        } else if (commandName === "admin_set_token") {
           // New command logic for adding a token
           if (
             !interaction.memberPermissions?.has(
@@ -1197,17 +1400,73 @@ export function main(): void {
           }
           if (interaction.isChatInputCommand()) {
             const network = interaction.options.getInteger("network", true);
+            const foundChain = Chains.find(
+              (chain) => chain.chainId === network,
+            );
+            assert(foundChain, "Chain not found");
             const tokenAddress = interaction.options.getString(
               "token_address",
               true,
             );
             const guildId = interaction.guildId!;
-            const userId = `${guildId}-token`;
-            await userStore.setAddress(userId, guildId, network, tokenAddress);
-            const chain = ChainsById[network];
-            const chainName = chain ? chain.name : "Unknown Chain";
+            const viemChain = getViemChain(foundChain.chainId);
+            assert(viemChain, `Chain ${foundChain.chainId} not found`);
+
+            const erc20 = viem.getContract({
+              address: viem.getAddress(tokenAddress),
+              abi: ERC20_ABI,
+              client: viem.createPublicClient({
+                chain: viemChain,
+                transport: viem.http(),
+              }),
+            });
+            const [name, symbol, decimals] = await Promise.all([
+              erc20.read.name(),
+              erc20.read.symbol(),
+              erc20.read.decimals(),
+            ]);
+            const tokenInfo = {
+              guildId,
+              chainId: foundChain.chainId,
+              name,
+              symbol,
+              decimals,
+              address: tokenAddress,
+            };
+            await tokenModel.setToken(tokenInfo);
             await interaction.reply({
-              content: `Token address stored for ${chainName} (${network}): ${tokenAddress}`,
+              embeds: [
+                {
+                  title: `✅ Token Added for ${foundChain.name}`,
+                  color: 0x2ecc71,
+                  description: `**Token Address:**\n\`${tokenAddress}\``,
+                  fields: [
+                    {
+                      name: "Chain",
+                      value: `${foundChain.name} (${foundChain.chainId})`,
+                      inline: true,
+                    },
+                    {
+                      name: "Name",
+                      value: `${name}`,
+                      inline: true,
+                    },
+                    {
+                      name: "Symbol",
+                      value: `${symbol}`,
+                      inline: true,
+                    },
+                    {
+                      name: "Decimals",
+                      value: `${decimals}`,
+                      inline: true,
+                    },
+                  ],
+                  footer: {
+                    text: "Token information saved successfully.",
+                  },
+                },
+              ],
               ephemeral: true,
             });
           }
@@ -1236,16 +1495,88 @@ export function main(): void {
             );
             if (!chain) {
               await interaction.reply({
-                content: `Invalid network prefix: ${networkPrefix}`,
+                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
                 ephemeral: true,
               });
               return;
             }
             const guildId = interaction.guildId!;
-            const userId = `${guildId}-token`;
-            await userStore.deleteAddress(userId, guildId, chain.chainId); // Assuming delete method exists
+            const token = await tokenModel.getToken(
+              guildId,
+              chain.chainId,
+              tokenAddress,
+            );
+            if (!token) {
+              await interaction.reply({
+                content: `Token not found on chain ${chain.name} with address ${tokenAddress}`,
+                ephemeral: true,
+              });
+              return;
+            }
+            await tokenModel.deleteToken(guildId, chain.chainId, tokenAddress); // Assuming delete method exists
             await interaction.reply({
-              content: `Token address removed for ${chain.name} (${chain.chainId}): ${tokenAddress}`,
+              content: `Token address removed for ${chain.name} (${chain.chainId}): ${token.name}(${token.symbol})`,
+              ephemeral: true,
+            });
+          }
+        } else if (commandName === "admin_search_address") {
+          if (interaction.isChatInputCommand()) {
+            const guild = interaction.guild;
+            const guildId = interaction.guildId;
+            assert(guildId, "Guild not found");
+            assert(guild, "Guild not found");
+            const address = interaction.options.getString("address", true);
+            const usersWithAddress = await userModel.getUsersByAddress(
+              guildId,
+              address,
+            );
+
+            if (usersWithAddress.length === 0) {
+              await interaction.reply({
+                content: `No users found for address: ${address}`,
+                ephemeral: true,
+              });
+              return;
+            }
+
+            const userAddresses = await Promise.all(
+              usersWithAddress.map(async ({ userId, chainId, address }) => {
+                try {
+                  const chain = ChainsById[chainId];
+                  const user = await guild.members.fetch(userId);
+                  return { user, chain }; // Return an object with user and chain
+                } catch (error) {
+                  console.error(
+                    `Error fetching user data for userId ${userId}:`,
+                    error,
+                  );
+                  return null; // Return null for filtering out errors
+                }
+              }),
+            ).then((results) => results.filter((result) => result !== null));
+
+            const groupedUserAddresses: Record<
+              string,
+              { user: GuildMember; chain: ChainSummary }[]
+            > = _.groupBy(userAddresses, "user.id");
+            const userCards: string = renderUsers(
+              Object.entries(groupedUserAddresses).map(
+                ([userId, addresses]: [
+                  string,
+                  { user: GuildMember; chain: ChainSummary }[],
+                ]) => {
+                  const user: GuildMember = addresses[0].user; // Get the user from the first address
+                  const chainAddresses: {
+                    chain: ChainSummary;
+                    address: string;
+                  }[] = addresses.map(({ chain }) => ({ chain, address }));
+                  return [user, chainAddresses];
+                },
+              ),
+            );
+
+            await interaction.reply({
+              content: `**Users found for address ${address}:**\n\n${userCards}`,
               ephemeral: true,
             });
           }
@@ -1269,7 +1600,7 @@ export function main(): void {
       if (focusedOption.name === "address") {
         const userId = interaction.user.id;
         const guildId = interaction.guildId!;
-        const userAddresses = await userStore.getUser(userId, guildId);
+        const userAddresses = await userModel.getUser(userId, guildId);
 
         // Check if a network option is set
         const networkOption = interaction.options.get("network");
@@ -1285,7 +1616,7 @@ export function main(): void {
         const userInput = interaction.options.getString("address", false) || "";
         let maybeAddress: string | undefined;
         if (userInput) {
-          maybeAddress = userInput.split(":")[1];
+          maybeAddress = userInput.split(":")[1] ?? userInput;
         }
 
         if (maybeAddress) {
@@ -1294,6 +1625,7 @@ export function main(): void {
             address.toLowerCase().startsWith(maybeAddress.toLowerCase()),
           );
         }
+        console.log({ maybeAddress, filteredAddresses, userInput });
 
         const choices = filteredAddresses.map(({ chainId, address }) => {
           const chain = ChainsById[chainId];
@@ -1311,7 +1643,7 @@ export function main(): void {
         }
       } else if (focusedOption.name === "safe_address") {
         const guildId = interaction.guildId!;
-        let safeAddresses = await userStore.getUser(guildId, guildId);
+        let safeAddresses = await userModel.getUser(guildId, guildId);
 
         const userInput =
           interaction.options.getString("safe_address", false) || "";
@@ -1347,19 +1679,16 @@ export function main(): void {
         }
       } else if (focusedOption.name === "token_address") {
         const guildId = interaction.guildId!;
-        const userId = `${guildId}-token`;
-        let tokenAddresses = await userStore.getUser(userId, guildId);
 
         const userInput =
           interaction.options.getString("token_address", false) || "";
         const [inputNetwork, inputAddress] = userInput.split(":");
-        tokenAddresses = tokenAddresses.filter(({ chainId, address }) => {
-          const chain = ChainsById[chainId];
-          const chainName = chain ? chain.name.toLowerCase() : "";
 
-          const matchesNetwork = inputNetwork
-            ? chainName.startsWith(inputNetwork.toLowerCase())
-            : true;
+        const tokens = await tokenModel.getTokensByGuild(guildId);
+        console.log("guild tokens", tokens, inputNetwork, inputAddress);
+
+        const filteredTokens = tokens.filter(({ address, chainId }) => {
+          const matchesNetwork = inputNetwork ? chainId !== undefined : true;
 
           const matchesAddress = inputAddress
             ? address.toLowerCase().startsWith(inputAddress.toLowerCase())
@@ -1368,12 +1697,12 @@ export function main(): void {
           return matchesNetwork && matchesAddress;
         });
 
-        const choices = tokenAddresses.map(({ chainId, address }) => {
+        const choices = filteredTokens.map(({ address, symbol, chainId }) => {
           const chain = ChainsById[chainId];
           const chainName = chain ? chain.name : "Unknown Chain";
           return {
-            name: `${chainName}:${address}`,
-            value: `${chain.shortName}:${address}`,
+            name: `${chainName}:${symbol}:${address}`,
+            value: `${chain ? chain.shortName : "unknown"}:${address}`,
           };
         });
 
@@ -1394,7 +1723,7 @@ export function main(): void {
           const userId = interaction.user.id;
           const guildId = interaction.guildId!;
 
-          await userStore.setAddress(userId, guildId, network, address);
+          await userModel.setAddress(userId, guildId, network, address);
           const chain = ChainsById[network];
           const chainName = chain ? chain.name : "Unknown Chain";
           await interaction.reply({
@@ -1459,7 +1788,7 @@ export function main(): void {
           for (const userId in userIdToAmount) {
             try {
               // safeData should contain: { chainId, safeAddress, erc20Address, decimals }
-              const address = await userStore.getAddress(
+              const address = await userModel.getAddress(
                 userId,
                 interaction.guildId!,
                 safeData.chainId,
@@ -1587,7 +1916,7 @@ export function main(): void {
               ? `${user.username}#${user.discriminator}`
               : "Unknown#0000";
             try {
-              const address = await userStore.getAddress(
+              const address = await userModel.getAddress(
                 userId,
                 interaction.guildId!,
                 chainId,
@@ -1680,7 +2009,7 @@ export function main(): void {
         const userId = interaction.user.id;
         const guildId = interaction.guildId!;
         // Check if the user already has an address set for this network
-        const existingAddress = await userStore.getAddress(
+        const existingAddress = await userModel.getAddress(
           userId,
           guildId,
           network,
@@ -1727,7 +2056,7 @@ export function main(): void {
         }
         const guildId = guild.id;
         const allDiscordUsers = await guild.members.fetch();
-        const allAddresses = await userStore.getUsersByChain(network, guildId);
+        const allAddresses = await userModel.getUsersByChain(network, guildId);
 
         const usersWithAddresses = new Set(
           allAddresses.map((addr) => addr.userId),
@@ -1831,7 +2160,7 @@ export function main(): void {
 
   client.login(process.env.DISCORD_TOKEN as string);
 
-  const api = Api(userStore);
+  const api = Api(userModel);
   const apiRpc = RpcFactory(api as any);
   const apiRouter = RouterService(apiRpc);
   // Run the express app

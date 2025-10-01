@@ -36,7 +36,7 @@ export const Chains = [
   // { chainId: 43113, name: "Avalanche Fuji Testnet", currency: "AVAX" },
   // { chainId: 250, name: "Fantom Opera", currency: "FTM" },
   // { chainId: 4002, name: "Fantom Testnet", currency: "FTM" },
-  { chainId: 42161, name: "Arbitrum One", currency: "ETH", shortName: "arbi" },
+  { chainId: 42161, name: "Arbitrum One", currency: "ETH", shortName: "arb1" },
   // { chainId: 421611, name: "Arbitrum Rinkeby", currency: "ETH" },
   { chainId: 10, name: "Optimism", currency: "ETH", shortName: "oeth" },
   // { chainId: 69, name: "Optimism Kovan", currency: "ETH" },
@@ -58,16 +58,20 @@ export const Chains = [
   // { chainId: 84531, name: "Base Goerli Testnet", currency: "ETH" },
 ];
 
-export function mapChainsById(): Record<
-  number,
-  { name: string; currency: string; shortName: string }
-> {
+export type ChainSummary = {
+  name: string;
+  currency: string;
+  shortName: string;
+  chainId: number;
+};
+
+export function mapChainsById(): Record<number, ChainSummary> {
   return Chains.reduce(
     (acc, { chainId, name, currency, shortName }) => {
-      acc[chainId] = { name, currency, shortName };
+      acc[chainId] = { name, currency, shortName, chainId };
       return acc;
     },
-    {} as Record<number, { name: string; currency: string; shortName: string }>,
+    {} as Record<number, ChainSummary>,
   );
 }
 
@@ -344,4 +348,45 @@ export async function resolveDiscordUser(
 
   // Not found
   return null;
+}
+
+export function renderUser(
+  user: GuildMember,
+  addresses: { chain: ChainSummary; address: string }[],
+) {
+  if (addresses.length === 0)
+    return `No addresses found for **${user.displayName}** (${user.user.tag}, ${user.id}).`;
+
+  const msg = [
+    `${addresses.length} Addresses set for **${user.displayName}** (${user.user.tag}, ${user.id}):\`\`\`\n`,
+  ];
+
+  // Sort addresses by chain name
+  addresses.sort((a, b) => a.chain.name.localeCompare(b.chain.name));
+
+  addresses.forEach(({ chain, address }, index) => {
+    // Align the addresses by calculating the maximum length of the chain name and chain ID
+    const chainInfo = `${chain.name}(${chain.chainId}):`;
+    const padding =
+      Math.max(
+        ...addresses.map(
+          ({ chain }) => `${chain.name}(${chain.chainId}):`.length,
+        ),
+      ) + 1; // +2 for spacing
+    msg.push(`${index + 1}. ${chainInfo.padEnd(padding)} ${address}`);
+  });
+
+  return msg.join("\n") + "```";
+}
+
+export function renderUsers(
+  users: [GuildMember, { chain: ChainSummary; address: string }[]][],
+): string {
+  if (users.length === 0) return "No users found.";
+
+  const messages = users.map(([user, addresses]) => {
+    return renderUser(user, addresses);
+  });
+
+  return messages.join("\n\n");
 }
