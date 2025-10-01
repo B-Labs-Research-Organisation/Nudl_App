@@ -139,6 +139,95 @@ export class RedisStore<K, V> implements Store<K, V> {
   }
 }
 
+export type PartialToken = {};
+
+export type Token = {
+  name: string;
+  symbol: string;
+  decimals: number;
+  address: string;
+  chainId: number;
+  guildId: string;
+};
+
+export function Tokens(store: Store<string, string>) {
+  async function setToken(token: Token): Promise<void> {
+    const key = encodeKey(
+      [token.guildId, token.chainId, token.address].filter(Boolean),
+    );
+    const value = JSON.stringify(token);
+    await store.set(key, value);
+  }
+
+  async function getToken(
+    guildId: string,
+    chainId: number,
+    address: string,
+  ): Promise<Token | undefined> {
+    const key = encodeKey([guildId, chainId, address].filter(Boolean));
+    const value = await store.get(key);
+    if (value) {
+      return JSON.parse(value) as Token;
+    }
+    return undefined;
+  }
+
+  async function deleteToken(
+    guildId: string,
+    chainId: number,
+    address: string,
+  ): Promise<boolean> {
+    const key = encodeKey([guildId, chainId, address].filter(Boolean));
+    return await store.delete(key);
+  }
+
+  async function hasToken(
+    guildId: string,
+    chainId: number,
+    address: string,
+  ): Promise<boolean> {
+    const key = encodeKey([guildId, chainId, address].filter(Boolean));
+    return await store.has(key);
+  }
+
+  async function getTokensByGuild(guildId: string): Promise<Token[]> {
+    const entries = await store.entries();
+    return Array.from(entries)
+      .filter(([key, _]) => {
+        const [storedGuildId] = decodeKey(key);
+        return storedGuildId === guildId;
+      })
+      .map(([key, value]) => {
+        console.log(key, value);
+        return JSON.parse(value) as Token;
+      });
+  }
+
+  async function getTokensByGuildAndChain(
+    guildId: string,
+    chainId: number,
+  ): Promise<Token[]> {
+    const entries = await store.entries();
+    return Array.from(entries)
+      .filter(([key, _]) => {
+        const [storedGuildId, storedChainId] = decodeKey(key);
+        return storedGuildId === guildId && Number(storedChainId) === chainId;
+      })
+      .map(([_, value]) => JSON.parse(value) as Token);
+  }
+
+  return {
+    setToken,
+    getToken,
+    deleteToken,
+    hasToken,
+    getTokensByGuild,
+    getTokensByGuildAndChain,
+  };
+}
+
+export type Tokens = ReturnType<typeof Tokens>;
+
 interface User {
   userId: string;
   guildId: string;
@@ -157,7 +246,7 @@ export function Users(store: Store<string, string>) {
     if (!isAddress(address)) {
       throw new Error("Invalid Address");
     }
-    const key = encodeKey([userId, guildId, chainId]);
+    const key = encodeKey([userId, guildId, chainId].filter(Boolean));
     await store.set(key, address);
   }
 
@@ -166,7 +255,7 @@ export function Users(store: Store<string, string>) {
     guildId: string,
     chainId: number,
   ): Promise<string | undefined> {
-    const key = encodeKey([userId, guildId, chainId]);
+    const key = encodeKey([userId, guildId, chainId].filter(Boolean));
     return await store.get(key);
   }
 
@@ -175,7 +264,7 @@ export function Users(store: Store<string, string>) {
     guildId: string,
     chainId: number,
   ): Promise<boolean> {
-    const key = encodeKey([userId, guildId, chainId]);
+    const key = encodeKey([userId, guildId, chainId].filter(Boolean));
     return await store.delete(key);
   }
 
@@ -226,6 +315,38 @@ export function Users(store: Store<string, string>) {
       });
   }
 
+  async function getUsersByAddress(
+    guildId: string,
+    address: string,
+  ): Promise<{ userId: string; chainId: number; address: string }[]> {
+    const entries = await store.entries();
+    return Array.from(entries)
+      .filter(([key, value]) => {
+        const [, storedGuildId] = decodeKey(key);
+        return storedGuildId === guildId && value === address;
+      })
+      .map(([key, address]: [string, string]) => {
+        const [userId, , chainId] = decodeKey(key);
+        return { userId, chainId: Number(chainId), address };
+      });
+  }
+
+  async function getAddressesByUser(
+    guildId: string,
+    userId: string,
+  ): Promise<{ userId: string; chainId: number; address: string }[]> {
+    const entries = await store.entries();
+    return Array.from(entries)
+      .filter(([key]) => {
+        const [storedUserId, storedGuildId] = decodeKey(key);
+        return storedGuildId === guildId && storedUserId === userId;
+      })
+      .map(([key, address]: [string, string]) => {
+        const [userId, , chainId] = decodeKey(key);
+        return { userId, chainId: Number(chainId), address };
+      });
+  }
+
   return {
     setAddress,
     getAddress,
@@ -233,6 +354,8 @@ export function Users(store: Store<string, string>) {
     getUsersByChain,
     getAllAddresses,
     deleteAddress,
+    getUsersByAddress,
+    getAddressesByUser,
   };
 }
 
