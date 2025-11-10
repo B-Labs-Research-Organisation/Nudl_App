@@ -350,8 +350,13 @@ export async function resolveDiscordUser(
   return null;
 }
 
+type DiscordUser = {
+  user:{tag:string}
+  id:string;
+  displayName:string;
+}
 export function renderUser(
-  user: GuildMember,
+  user: DiscordUser,
   addresses: { chain: ChainSummary; address: string }[],
 ) {
   if (addresses.length === 0)
@@ -380,7 +385,7 @@ export function renderUser(
 }
 
 export function renderUsers(
-  users: [GuildMember, { chain: ChainSummary; address: string }[]][],
+  users: [DiscordUser, { chain: ChainSummary; address: string }[]][],
 ): string {
   if (users.length === 0) return "No users found.";
 
@@ -390,3 +395,4 @@ export function renderUsers(
 
   return messages.join("\n\n");
 }
+
