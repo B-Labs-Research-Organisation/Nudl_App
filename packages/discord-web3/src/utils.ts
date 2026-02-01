@@ -1,8 +1,48 @@
 import assert from "assert";
+import ERC20_ABI from "./erc20.abi";
 import * as viem from "viem";
 import * as chains from "viem/chains";
-import { Client, User, GuildMember } from "discord.js";
+import * as Models from './models'
+import {
+  User,
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  Interaction,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
+  PermissionsBitField,
+  ChannelType,
+  GuildTextBasedChannel,
+  ButtonBuilder,
+  ButtonStyle,
+  TextChannel,
+  Utils,
+  GuildMember,
+  StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
+  CacheType,
+  Message,
+} from "discord.js";
 import { keccak256, toBytes } from "viem";
+
+export type Payout ={
+  id:string;
+  chainId?: number;
+  csvData?: string;
+  tokenAddress?: string;
+  safeAddress?: string;
+  decimals?: number;
+  interaction?:StringSelectMenuInteraction<CacheType>;
+  messageId?: string;
+  channelId?: string;
+  list: [GuildMember, { chain: ChainSummary; address: string; }[]][]
+}
+export type Payouts = Record<string,Payout> 
 
 export function getId(): string {
   return Math.random().toString(36).substring(2, 9);
@@ -350,8 +390,13 @@ export async function resolveDiscordUser(
   return null;
 }
 
+type DiscordUser = {
+  user:{tag:string}
+  id:string;
+  displayName:string;
+}
 export function renderUser(
-  user: GuildMember,
+  user: DiscordUser,
   addresses: { chain: ChainSummary; address: string }[],
 ) {
   if (addresses.length === 0)
@@ -380,7 +425,7 @@ export function renderUser(
 }
 
 export function renderUsers(
-  users: [GuildMember, { chain: ChainSummary; address: string }[]][],
+  users: [DiscordUser, { chain: ChainSummary; address: string }[]][],
 ): string {
   if (users.length === 0) return "No users found.";
 
@@ -389,4 +434,646 @@ export function renderUsers(
   });
 
   return messages.join("\n\n");
+}
+
+
+export function renderPayoutPrefill(
+  users: [DiscordUser, { chain: ChainSummary; address: string }[]][],
+): string {
+  return users
+    .map(([user]) => `${user.user.tag},0`)
+    .join("\n");
+}
+
+/**
+ * Utility to generate Disperse payout CSV content, summary, and file info.
+ *
+ * @param {Object[]} addressEntries - Array of [address, amount] tuples (string, string)
+ * @param {number} chainId - Chain id for lookup
+ * @param {number} donateAmount - Donation amount (pass 0 if not donating)
+ * @param {string[]} errors - Error strings to append to final message
+ * @param {string | undefined} donateAddress - Address for donation (nullable/undefined if not donating)
+ * @param {string} [dateStr] - (optional) precomputed YYYY-MM-DD string, otherwise generated from now
+ * @returns {{
+ *   csvContent: string,
+ *   description: string,
+ *   file: { name: string, attachment: Buffer },
+ *   totalAmount: number
+ * }}
+ */
+export function dispersePayout({
+  addressEntries,
+  chainId,
+  donateAmount,
+  errors = [],
+  donateAddress,
+  dateStr,
+}: {
+  addressEntries: Array<[string, string]>,
+  chainId: number,
+  donateAmount: number,
+  errors?: string[],
+  donateAddress?: string,
+  dateStr?: string,
+}) {
+  // Optionally add donation
+  const entries = [...addressEntries];
+  const hasDonation =
+    donateAmount > 0 &&
+    typeof donateAddress === "string" &&
+    donateAddress.length > 0;
+
+  if (hasDonation) {
+    entries.push([donateAddress!, donateAmount.toString()]);
+  }
+
+  // CSV header
+  const csvContent =
+    [
+      "receiverAddress,value",
+      ...entries.map(([address, amount]) => `${address},${amount}`),
+    ].join("\n");
+
+  // Date string for file naming
+  const date =
+    dateStr ||
+    (() => {
+      const now = new Date();
+      return now.toISOString().slice(0, 10);
+    })();
+
+  const file = {
+    name: `disperse_${date}.csv`,
+    attachment: Buffer.from(csvContent, "utf-8"),
+  };
+
+  // Chain name via ChainsById, fallback if not imported
+  const chainName = ChainsById[chainId]?.name ?? "Unknown Chain";
+
+  // Calculate total amount
+  let totalAmount = entries.reduce(
+    (acc, [, amount]) => acc + parseFloat(amount),
+    0,
+  );
+
+  let description = `✅ Disperse CSV generated for ${entries.length} entries on ${chainName} (${chainId}).`;
+  if (hasDonation) {
+    description += `\nYou are donating ${donateAmount.toFixed(4)}, thank you! ❤️`;
+  }
+  description += `\n💸 ___Total amount to transfer___: **${totalAmount}**`;
+  if (errors.length > 0) {
+    description += `\n\n⚠️ Some issues were found:\n\`\`\`\n${errors.join(
+      "\n",
+    )}\n\`\`\``;
+  }
+
+  return {
+    csvContent,
+    description,
+    file,
+    totalAmount,
+  };
+}
+
+/**
+ * Resolves CSV data into blockchain addresses and collects errors.
+ * 
+ * @param params
+ *  - client: The Discord client instance to resolve users.
+ *  - csvData: The raw CSV data (string).
+ *  - guildId: The Discord guild/server ID in which to resolve names.
+ *  - userModel: Object with getAddress(userId, guildId, chainId) method.
+ *  - chainId: Number representing the blockchain to resolve for.
+ * @returns Promise<{ addressEntries: Array<[string, string]>, errors: string[] }>
+ */
+export async function parseRecipientsCsvAndResolveAddresses({
+  client,
+  csvData,
+  guildId,
+  userModel,
+  chainId,
+}: {
+  client: any;
+  csvData: string;
+  guildId: string;
+  userModel: { getAddress: (userId: string, guildId: string, chainId: number) => Promise<string | undefined> };
+  chainId: number;
+}): Promise<{ addressEntries: Array<[string, string]>, errors: string[] }> {
+  // Parse CSV lines into [id, amount] pairs
+  const lines = csvData
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+  const errors: string[] = [];
+  const userIdToAmount: Record<string, string> = {};
+  const userIdToUser: Record<string, any> = {};
+
+  // 1. Resolve Discord users
+  for (let i = 0; i < lines.length; i++) {
+    const [idRaw, amountRaw] = lines[i]
+      .split(/[\t,= ]/)
+      .map((s) => s.trim());
+    if (!idRaw || !amountRaw) {
+      errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);
+      continue;
+    }
+    try {
+      const user = await resolveDiscordUser(client, idRaw, guildId);
+      if (!user) {
+        errors.push(`Line ${i + 1}: Could not resolve user "${idRaw}"`);
+        continue;
+      }
+      userIdToAmount[user.id] = amountRaw;
+      userIdToUser[user.id] = user;
+    } catch (e) {
+      errors.push(`Line ${i + 1}: Error resolving user "${idRaw}"`);
+      continue;
+    }
+  }
+
+  // 2. Lookup addresses for resolved users
+  const addressEntries: Array<[string, string]> = [];
+  for (const userId in userIdToAmount) {
+    const user = userIdToUser[userId];
+    const userDisplayName = user ? user.username : "Unknown";
+    const userUniqueName = user
+      ? `${user.username}#${user.discriminator}`
+      : "Unknown#0000";
+    try {
+      const address = await userModel.getAddress(
+        userId,
+        guildId,
+        chainId
+      );
+      if (!address) {
+        errors.push(
+          `User ${userId} (${userDisplayName}, ${userUniqueName}): No address found for chain ${chainId}`
+        );
+        continue;
+      }
+      addressEntries.push([address, userIdToAmount[userId]]);
+    } catch (e) {
+      errors.push(
+        `User ${userId} (${userDisplayName}, ${userUniqueName}): Error looking up address`
+      );
+      continue;
+    }
+  }
+
+  return { addressEntries, errors };
+}
+// INSERT_YOUR_CODE
+
+/**
+ * Renders a token select menu row for payout flows.
+ * @param {Object} params
+ * @param {object} params.payout - The payout object containing at least payoutId and chainId.
+ * @param {object} params.tokenModel - The tokenModel (must implement getTokensByGuild).
+ * @param {string} params.guildId - The guild ID to look up token addresses.
+ * @returns {Promise<ActionRowBuilder<StringSelectMenuBuilder>>}
+ */
+export async function renderTokenSelectRowForPayout({
+  payout,
+  tokenModel,
+  guildId,
+}:{payout:Payout,tokenModel:Models.Tokens, guildId:string}) {
+  const payoutId = payout.id 
+  const selectedChainId = payout.chainId;
+  if (!payoutId || !selectedChainId) throw new Error('Missing payoutId or chainId');
+  // Get saved tokens for this guild
+  const savedTokens = await tokenModel.getTokensByGuild(guildId);
+  // Filter tokens by selected chain
+  const filteredTokens = savedTokens.filter((t) => t.chainId === selectedChainId);
+
+  // Compose dropdown choices (token select options)
+  const tokenOptions = filteredTokens.map(({ address, symbol }) => ({
+    label: symbol ? `${symbol}: ${address}` : address,
+    value: address,
+  }));
+
+  // Prepend an 'Add New Token' option
+  tokenOptions.unshift({
+    label: "➕ Add a new token (not listed)",
+    value: `ADD_TOKEN`,
+  });
+
+  // Build and return the select menu row
+  return new ActionRowBuilder()
+    .addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`payoutTokenSelect_${payoutId}`)
+        .setPlaceholder("Choose an existing token, or add a new one")
+        .addOptions(tokenOptions)
+    );
+}
+
+/**
+ * Renders the action row for Safe payout setup with token/safe edit buttons and status.
+ * @param {Object} params
+ * @param {object} params.payout - The payout object with payoutId, tokenAddress, safeAddress etc.
+ * @returns {ActionRowBuilder<ButtonBuilder>}
+ */
+export function renderSafePayoutSetupRow(payout :Payout) {
+  const payoutId = payout.id
+  if (!payoutId) throw new Error('Missing payoutId');
+
+  const chainId = payout.chainId;
+  if (!chainId) throw new Error('Missing chain');
+
+  const components = [new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`setTokenButton_${payoutId}`)
+      .setLabel(payout.tokenAddress ? "Edit Token Address" : "Set Token Address")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`setSafeButton_${payoutId}`)
+      .setLabel(payout.safeAddress ? "Edit Safe Address" : "Set Safe Address")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`safePayoutGenerate_${payoutId}`)
+      .setLabel("Generate Safe Payout")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!(payout.tokenAddress && payout.safeAddress))
+  )];
+  // Compose status info for user context
+  const tokenAddrStr = payout.tokenAddress
+    ? `**Token Address:** \`${payout.tokenAddress}\``
+    : "*No token address set*";
+  const safeAddrStr = payout.safeAddress
+    ? `**Safe Address:** \`${payout.safeAddress}\``
+    : "*No safe address set*";
+  return {
+    content:
+      `Safe payout setup for ${ChainsById[chainId]?.name ?? chainId}:\n${tokenAddrStr}\n${safeAddrStr}`,
+    components,
+  };
+}
+
+/**
+ * Renders the data for the admin_manage_safes screen, for use in a Discord reply.
+ * This builds the summary and action row, but does not send a reply.
+ * 
+ * @param {object} params
+ * @param {Array} params.allSafes - Array of all safe address objects for this guild.
+ * @returns {{ content: string, components: [ActionRowBuilder<ButtonBuilder>] }}
+ */
+type Safe = {
+  userId: string;
+  chainId: number;
+  address: string;
+}
+type Safes = Safe[]
+export function getAdminManageSafesDisplay({ allSafes, prefix='manageSafe' }:{allSafes:Safes, prefix?:string}) {
+  // Compose per-chain summary
+  const perChainSummary = Chains.map((chain) => {
+    const safeForChain = allSafes.find(
+      (safe) => safe.chainId === chain.chainId
+    );
+    if (safeForChain) {
+      return `**${chain.name}**: \`${safeForChain.address}\``;
+    } else {
+      return `**${chain.name}**: _None_`;
+    }
+  }).join("\n");
+
+  // Buttons
+  const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${prefix}_add`)
+      .setLabel("Add Safe")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`${prefix}_remove`)
+      .setLabel("Remove Safe")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  const content =
+    `**Manage Guild Safe Addresses**\n` +
+    `Use the buttons below to add or remove a safe address for a specific chain.\n` +
+    `_Safes must be added with network prefix and address_\n\n` +
+    perChainSummary;
+
+  return {
+    content,
+    components: [buttonRow],
+  };
+}
+/**
+ * Renders a Discord dropdown for selecting a token to remove from a specific chain.
+ * 
+ * @param {Object} params
+ * @param {number} params.chainId - The selected chain id
+ * @param {Array} params.tokensOnChain - Tokens to display (Models.Token[])
+ * @param {string} [params.prefix="manageTokens"] - Prefix for customId
+ * @returns {{ content: string, components: [ActionRowBuilder<StringSelectMenuBuilder>] }}
+ */
+export function selectTokenToRemoveDisplay({
+  chainId,
+  tokensOnChain,
+  prefix = "manageTokens"
+}: {
+  chainId: number,
+  tokensOnChain: Models.Token[],
+  prefix?: string
+}) {
+  // Compose dropdown options, use symbol + short address as label
+  const options = tokensOnChain.map(token => ({
+    label: token.symbol ? `${token.symbol}` : token.address.slice(0, 6) + "...",
+    description: token.name
+      ? `${token.name} - ${token.address.slice(0, 6)}...${token.address.slice(-4)}`
+      : `${token.address.slice(0, 6)}...${token.address.slice(-4)}`,
+    value: `${token.address}`
+  }));
+
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`${prefix}_removeSelect_${chainId}`)
+    .setPlaceholder('Select a token to remove')
+    .addOptions(options)
+    .setMinValues(1)
+    .setMaxValues(1);
+
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+  // Compose user prompt
+  const content = `❌ **Remove a Token from ${ChainsById[chainId]?.name ?? chainId}**\nSelect the token you wish to remove from this network:`;
+
+  return {
+    content,
+    components: [row]
+  };
+}
+export function getAdminManageTokensDisplay({
+  allTokens,
+  prefix = 'manageTokens',
+  selectedNetwork, // optional, controls enabling add/remove buttons
+}: {
+  allTokens: Models.Token[],
+  prefix?: string,
+  selectedNetwork?: string, // (optional) string - "all" or chainId as string
+}) {
+  // Compose per-chain token summary; each chain can have multiple tokens.
+  const perChainSummary = Chains.map((chain) => {
+    const tokensOnChain = allTokens.filter(
+      (token) => token.chainId === chain.chainId
+    );
+
+    if (tokensOnChain.length > 0) {
+      const tokensList = tokensOnChain
+        .map(
+          (token) =>
+            `\`${token.symbol}\` (\`${token.address.slice(0, 6)}...${token.address.slice(-4)}\`)` +
+            `${token.name ? ` — ${token.name}` : ""}`
+        )
+        .join('\n');
+      return `**${chain.name}**:\n${tokensList}`;
+    } else {
+      return `**${chain.name}**: _No tokens added_`;
+    }
+  }).join('\n\n');
+
+  // Network dropdown for selecting which network to add or remove tokens from
+  const networkDropdownRow = selectNetworkDropdown({
+    allNetworks: Chains,
+    prefix: `${prefix}_networkSelect`,
+    selectedNetwork
+  }).components[0];
+
+  // The add/remove buttons are disabled unless a network is selected.
+  // Comment: You must select a network to enable the Add/Remove Token buttons.
+  const enableButtons = typeof selectedNetwork !== "undefined" && selectedNetwork !== "" && selectedNetwork !== "all";
+
+  // If a network is selected, append the network number to the custom id
+  const addCustomId = enableButtons ? `${prefix}_add_${selectedNetwork}` : `${prefix}_add`;
+  const removeCustomId = enableButtons ? `${prefix}_remove_${selectedNetwork}` : `${prefix}_remove`;
+
+  const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(addCustomId)
+      .setLabel("Add Token")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!enableButtons),
+    new ButtonBuilder()
+      .setCustomId(removeCustomId)
+      .setLabel("Remove Token")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(!enableButtons)
+  );
+
+  const content =
+    `**Manage Guild ERC-20 Tokens**\n` +
+    `_All your tokens are shown below by network. You must select a network from the dropdown to add or remove tokens._\n\n` +
+    perChainSummary + 
+    `\n\nSelect a network below to enable the add/remove buttons for that network.\n`
+
+  return {
+    content,
+    components: [networkDropdownRow, buttonRow],
+  };
+}
+
+export function selectNetworkDropdown(params: {
+  allNetworks: ChainSummary[],
+  prefix?: string,
+  selectedNetwork?: string, // Optional parameter for the selected network
+}) {
+  const {
+    allNetworks,
+    prefix = "networkSelect",
+    selectedNetwork
+  } = params;
+
+  // Option: "All"
+  const options = [
+    ...allNetworks.map(net => ({
+      label: net.name,
+      value: String(net.chainId),
+      description: net.shortName ? `(${net.shortName.toUpperCase()})` : undefined,
+      default: selectedNetwork === String(net.chainId)
+    })),
+  ];
+
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`${prefix}_dropdown`)
+    .setPlaceholder("Select a network...")
+    .addOptions(options);
+
+  const actionRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+  return {
+    components: [actionRow],
+  };
+}
+
+/**
+ * Default token management display, shows Add/Remove buttons and optionally a network dropdown.
+ * This is meant for the normal "manage tokens" view, not for the removal select flow.
+ */
+export function tokenSelectionDisplay({
+  allTokens,
+  prefix = "manageTokens",
+  selectedNetwork,
+}: {
+  allTokens: Models.Token[],
+  prefix?: string,
+  selectedNetwork?: string, // "all" or chainId as string
+}) {
+  // If selectedNetwork is undefined, default to "all"
+  const actualSelectedNetwork = typeof selectedNetwork === "undefined" ? "all" : selectedNetwork;
+
+  // Early return: No tokens at all
+  if (!allTokens || allTokens.length === 0) {
+    return {
+      content: "No tokens available to manage.",
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`${prefix}_add`)
+            .setLabel("Add Token")
+            .setStyle(ButtonStyle.Success)
+        )
+      ]
+    };
+  }
+
+  // Compose a simple per-network summary
+  const summaryLines = allTokens.map(token => {
+    const chainLabel = (ChainsById[token.chainId]?.name)
+      || token.chainId
+      || "Unknown";
+    return `• **${token.symbol}** on ${chainLabel}: \`${token.address.slice(0, 6)}...${token.address.slice(-4)}\`` +
+      (token.name ? ` — ${token.name}` : "");
+  }).join("\n");
+
+  // Add/remove buttons
+  const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${prefix}_add`)
+      .setLabel("Add Token")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`${prefix}_remove`)
+      .setLabel("Remove Token")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  return {
+    content: `**Manage Guild Tokens**\n${summaryLines ? `\n${summaryLines}\n` : "\n_No tokens currently registered._\n"}`,
+    components: [buttonRow],
+  };
+}
+
+/**
+ * Shows the user a token selection menu to remove a token from a network.
+ * Intended as a confirmation/removal select step.
+ */
+export function tokenRemovalSelectionDisplay({
+  allTokens,
+  chainId,
+  prefix = "manageTokens"
+}: {
+  allTokens: Models.Token[],
+  chainId: number,
+  prefix?: string
+}) {
+  // Only tokens on this network
+  const tokensOnChain = allTokens.filter(token => token.chainId === chainId);
+
+  if (!tokensOnChain || tokensOnChain.length === 0) {
+    return {
+      content: `No tokens available to remove for ${ChainsById[chainId]?.name ?? `chain ${chainId}`}.`,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`${prefix}_add_${chainId}`)
+            .setLabel("Add Token")
+            .setStyle(ButtonStyle.Success)
+        )
+      ]
+    }
+  }
+
+  // Compose select menu options for these tokens
+  const menuOptions = tokensOnChain.map(token => ({
+    label: `${token.symbol ?? token.address.slice(0, 6) + "..."}`,
+    description: token.name
+      ? `${token.name} - ${token.address.slice(0, 6)}...${token.address.slice(-4)}`
+      : `${token.address.slice(0, 6)}...${token.address.slice(-4)}`,
+    value: `${token.address}`
+  }));
+
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`${prefix}_removeSelect_${chainId}`)
+    .setPlaceholder(
+      menuOptions.length === 0
+        ? "No tokens for this network."
+        : "Select a token to remove"
+    )
+    .setDisabled(menuOptions.length === 0)
+    .addOptions(
+      menuOptions.slice(0, 25)
+    );
+
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+  // Compose cancel row
+  const cancelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${prefix}`)
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  return {
+    content: `❌ **Remove a Token from ${ChainsById[chainId]?.name ?? chainId}**\nSelect the token you wish to remove from this network:`,
+    components: [row, cancelRow]
+  };
+}
+
+// viem, chainId, tokenAddress, guildId required
+export async function fetchErc20TokenInfo({
+  chainId,
+  tokenAddress,
+  guildId,
+}: {
+  chainId: number,
+  tokenAddress: string,
+  guildId: string,
+}): Promise<{
+  guildId: string,
+  chainId: number,
+  name: string,
+  symbol: string,
+  decimals: number,
+  address: string,
+}> {
+  const viemChain = getViemChain(chainId);
+  assert(viemChain, `Chain ${chainId} not found`);
+
+  const address = viem.getAddress(tokenAddress);
+
+  const erc20 = viem.getContract({
+    address,
+    abi: ERC20_ABI,
+    client: viem.createPublicClient({
+      chain: viemChain,
+      transport: viem.http(),
+    }),
+  });
+
+  const [name, symbol, decimals] = await Promise.all([
+    erc20.read.name(),
+    erc20.read.symbol(),
+    erc20.read.decimals(),
+  ]);
+
+  return {
+    guildId,
+    chainId,
+    name,
+    symbol,
+    decimals,
+    address: tokenAddress,
+  };
 }
