@@ -16,12 +16,8 @@
 // DONE: when listing your own addresses make sure formatting is the same as other lists
 // DONE: Fix new safe address with prefix
 
-import dotenv from "dotenv";
 import {
   User,
-  Client,
-  GatewayIntentBits,
-  REST,
   Routes,
   SlashCommandBuilder,
   Interaction,
@@ -35,13 +31,11 @@ import {
   ButtonBuilder,
   ButtonStyle,
   TextChannel,
-  Utils,
   GuildMember,
   StringSelectMenuBuilder,
   MessageFlags,
 } from "discord.js";
 import * as viem from "viem";
-import { Users, Store, RedisStore, MapStore, Tokens } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import { Api } from "./api";
 import {
@@ -60,7 +54,6 @@ import {
   parseRecipientsCsvAndResolveAddresses,
   renderSafePayoutSetupRow,
   renderTokenSelectRowForPayout,
-  Payout, 
   Payouts,
   getAdminManageSafesDisplay,
   getAdminManageTokensDisplay,
@@ -69,12 +62,11 @@ import {
   fetchErc20TokenInfo,
 } from "./utils";
 import { Service as RouterService } from "./router";
-import { createClient } from "redis";
 import assert from "assert";
 import ERC20_ABI from "./erc20.abi";
 import _, { chain } from "lodash";
+import { createBot, start } from "./bot";
 
-dotenv.config();
 
 const fakeEthAddresses = [
   {
@@ -159,88 +151,25 @@ const fakeEthAddresses = [
   },
 ];
 
-const manageSafes: Record<string,{
-  id: string;
-  chainId?: number;
-  safeAddress?: string;
-}> = {}
-const safeGenerations: Record<
-  string,
-  {
-    id: string;
-    chainId: number;
-    safeAddress?: string;
-    tokenAddress?: string;
-    decimals?: number;
-    tokenName?: string;
-    tokenSymbol?: string;
-    donateAmount: number;
-    recipients?:Users;
-  }
-> = {};
-
-const dispersePayouts: Record<
-  string,
-  {
-    id: string;
-    chainId: number;
-    donateAmount: number;
-    recipients?:Users;
-  }
-> = {};
-
-const csvAirdropPayouts: Record<
-  string,
-  {
-    id: string;
-    type: string;
-    chainId: number;
-    tokenName: string;
-    tokenSymbol: string;
-    tokenAddress: string;
-    decimals: number;
-    donateAmount: number;
-    tokenId?: number;
-    recipients?:Users;
-  }
-> = {};
-
-const payouts: Payouts = {};
-
-export function main(): void {
-  const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMembers, // Add this intent to fetch all members in a guild
-    ],
-  });
-
-  let userStore: Store<string, string>;
-  let tokenStore: Store<string, string>;
-  let safeStore: Store<string, string>;
-
-  if (process.env.REDIS_URL) {
-    const redisClient = createClient({ url: process.env.REDIS_URL });
-    redisClient.connect();
-    userStore = new RedisStore(redisClient, "discord-web3");
-    tokenStore = new RedisStore(redisClient, "discord-web3-tokens");
-    safeStore = new RedisStore(redisClient, "discord-web3-safes");
-  } else {
-    userStore = new MapStore();
-    tokenStore = new MapStore();
-    safeStore = new MapStore();
-  }
-
-  const userModel = Users(userStore); // Initialize the user store
-  const safeModel = Users(safeStore); // Initialize the user store
-  const tokenModel = Tokens(tokenStore); // Initialize the user store
+export async function main(): Promise<void> {
+  const context = await createBot();
+  const {
+    client,
+    rest,
+    config,
+    models: { users: userModel, safes: safeModel, tokens: tokenModel },
+    stores: {
+      manageSafes,
+      safeGenerations,
+      dispersePayouts,
+      csvAirdropPayouts,
+      payouts,
+    },
+  } = context;
 
   client.once("ready", async () => {
     console.log("Discord client is ready!");
 
-    const rest = new REST({ version: "10" }).setToken(
-      process.env.DISCORD_TOKEN as string,
-    );
 
     const commands = [
       new SlashCommandBuilder()
@@ -557,7 +486,7 @@ export function main(): void {
       console.log("Started refreshing application (/) commands.");
 
       await rest.put(
-        Routes.applicationCommands(process.env.CLIENT_ID as string),
+        Routes.applicationCommands(config.clientId),
         { body: commands },
       );
 
@@ -650,7 +579,7 @@ export function main(): void {
             // Only one user: interaction.member
             const user = interaction.member;
             // Defensive fallback for GuildMember - in rare edge cases where interaction.member might not be set, refetch
-            let guildMember = user;
+            const guildMember = user;
             assert(
               guildMember && typeof guildMember.user === "object" && guildMember instanceof GuildMember,
               "Unable to find guild member"
@@ -996,7 +925,7 @@ export function main(): void {
             if (guild.members.cache.size === 0) {
               await guild.members.fetch();
             }
-            let allDiscordUsers = guild.members.cache;
+            const allDiscordUsers = guild.members.cache;
             
 
             // Filter users based on optional filters
@@ -2205,7 +2134,7 @@ export function main(): void {
           }
 
           // 2. Lookup addresses for resolved users
-          const addressEntries: Array<[string, string]> = [];
+          const addressEntries: [string, string][] = [];
           for (const userId in userIdToAmount) {
             try {
               // safeData should contain: { chainId, safeAddress, erc20Address, decimals }
@@ -2468,7 +2397,7 @@ export function main(): void {
           assert(guildId, "Guild not found");
 
           // Extract chainId and address from the customId: "manageSafe_confirmRemove_<chainId>_<address>"
-          const matches = interaction.customId.match(/^manageSafe_confirmRemove_(\d+)_(.+)$/);
+          const matches = /^manageSafe_confirmRemove_(\d+)_(.+)$/.exec(interaction.customId);
           assert(matches && matches[1] && matches[2], "No Safe selected to remove.");
           const chainId = Number(matches[1]);
           const address = matches[2];
@@ -2696,7 +2625,7 @@ export function main(): void {
         assert(guildId,"Guild not found")
 
         // Get saved tokens for this guild
-        const savedTokens: Array<{ address: string; symbol: string; chainId: number }> = await tokenModel.getTokensByGuild(guildId);
+        const savedTokens: { address: string; symbol: string; chainId: number }[] = await tokenModel.getTokensByGuild(guildId);
         // Filter tokens by selected chain
         const selectedChainId = payout.chainId
         const filteredTokens = savedTokens.filter((t) => t.chainId === selectedChainId);
@@ -2726,23 +2655,6 @@ export function main(): void {
           content: `Select a token to use for payout, or add a new token on ${ChainsById[selectedChainId]?.name ?? selectedChainId}:`,
           components: [tokenSelectRow],
         });
-      }else if (interaction.customId.startsWith("safePayoutButton_")) {
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const csvData = payout.csvData
-        assert(csvData,'Token amounts not found')
-        const guildId = interaction.guildId
-        assert(guildId,"Guild not found")
-        const chainId = payout.chainId
-        assert(chainId, "ChainId not found")
-        await interaction.editReply(renderSafePayoutSetupRow(payout));
       }else if (interaction.customId.startsWith("dispersePayoutButton_")) {
         const [_, payoutId] = interaction.customId.split("_");
         const payout = payouts[payoutId];
@@ -3179,7 +3091,7 @@ export function main(): void {
     }
   });
 
-  client.login(process.env.DISCORD_TOKEN as string);
+  await start(context);
 
   const api = Api(userModel);
   const apiRpc = RpcFactory(api as any);
@@ -3192,4 +3104,7 @@ export function main(): void {
   });
 }
 
-main();
+main().catch((error) => {
+  console.error("Failed to start Discord bot:", error);
+  process.exitCode = 1;
+});
