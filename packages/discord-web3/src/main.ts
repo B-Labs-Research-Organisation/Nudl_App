@@ -16,12 +16,8 @@
 // DONE: when listing your own addresses make sure formatting is the same as other lists
 // DONE: Fix new safe address with prefix
 
-import dotenv from "dotenv";
 import {
   User,
-  Client,
-  GatewayIntentBits,
-  REST,
   Routes,
   SlashCommandBuilder,
   Interaction,
@@ -35,13 +31,11 @@ import {
   ButtonBuilder,
   ButtonStyle,
   TextChannel,
-  Utils,
   GuildMember,
   StringSelectMenuBuilder,
   MessageFlags,
 } from "discord.js";
 import * as viem from "viem";
-import { Users, Store, RedisStore, MapStore, Tokens } from "./models"; // Import the User function
 import { Service } from "./express"; // Import the express service
 import { Api } from "./api";
 import {
@@ -60,7 +54,6 @@ import {
   parseRecipientsCsvAndResolveAddresses,
   renderSafePayoutSetupRow,
   renderTokenSelectRowForPayout,
-  Payout, 
   Payouts,
   getAdminManageSafesDisplay,
   getAdminManageTokensDisplay,
@@ -69,12 +62,35 @@ import {
   fetchErc20TokenInfo,
 } from "./utils";
 import { Service as RouterService } from "./router";
-import { createClient } from "redis";
 import assert from "assert";
 import ERC20_ABI from "./erc20.abi";
 import _, { chain } from "lodash";
+import { createBot, start } from "./bot";
+import {
+  handleTokenAutocomplete,
+  handleTokensButton,
+  handleTokensCommand,
+  handleTokensModalSubmit,
+  handleTokensSelectMenu,
+} from "./features/tokens/tokensFeature";
+import {
+  handleSafesButton,
+  handleSafesCommand,
+  handleSafesModalSubmit,
+  handleSafesSelectMenu,
+} from "./features/safes/safesFeature";
+import {
+  handlePayoutsButton,
+  handlePayoutsModalSubmit,
+  handlePayoutsSelectMenu,
+} from "./features/payouts/payoutsFeature";
+import { handlePayoutCommands } from "./features/payouts/payoutCommands";
+import {
+  handleAddAddressButton,
+  handleAddressAutocomplete,
+  handleAddressesCommands,
+} from "./features/addresses/addressesFeature";
 
-dotenv.config();
 
 const fakeEthAddresses = [
   {
@@ -159,88 +175,25 @@ const fakeEthAddresses = [
   },
 ];
 
-const manageSafes: Record<string,{
-  id: string;
-  chainId?: number;
-  safeAddress?: string;
-}> = {}
-const safeGenerations: Record<
-  string,
-  {
-    id: string;
-    chainId: number;
-    safeAddress?: string;
-    tokenAddress?: string;
-    decimals?: number;
-    tokenName?: string;
-    tokenSymbol?: string;
-    donateAmount: number;
-    recipients?:Users;
-  }
-> = {};
-
-const dispersePayouts: Record<
-  string,
-  {
-    id: string;
-    chainId: number;
-    donateAmount: number;
-    recipients?:Users;
-  }
-> = {};
-
-const csvAirdropPayouts: Record<
-  string,
-  {
-    id: string;
-    type: string;
-    chainId: number;
-    tokenName: string;
-    tokenSymbol: string;
-    tokenAddress: string;
-    decimals: number;
-    donateAmount: number;
-    tokenId?: number;
-    recipients?:Users;
-  }
-> = {};
-
-const payouts: Payouts = {};
-
-export function main(): void {
-  const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMembers, // Add this intent to fetch all members in a guild
-    ],
-  });
-
-  let userStore: Store<string, string>;
-  let tokenStore: Store<string, string>;
-  let safeStore: Store<string, string>;
-
-  if (process.env.REDIS_URL) {
-    const redisClient = createClient({ url: process.env.REDIS_URL });
-    redisClient.connect();
-    userStore = new RedisStore(redisClient, "discord-web3");
-    tokenStore = new RedisStore(redisClient, "discord-web3-tokens");
-    safeStore = new RedisStore(redisClient, "discord-web3-safes");
-  } else {
-    userStore = new MapStore();
-    tokenStore = new MapStore();
-    safeStore = new MapStore();
-  }
-
-  const userModel = Users(userStore); // Initialize the user store
-  const safeModel = Users(safeStore); // Initialize the user store
-  const tokenModel = Tokens(tokenStore); // Initialize the user store
+export async function main(): Promise<void> {
+  const context = await createBot();
+  const {
+    client,
+    rest,
+    config,
+    models: { users: userModel, safes: safeModel, tokens: tokenModel },
+    stores: {
+      manageSafes,
+      safeGenerations,
+      dispersePayouts,
+      csvAirdropPayouts,
+      payouts,
+    },
+  } = context;
 
   client.once("ready", async () => {
     console.log("Discord client is ready!");
 
-    const rest = new REST({ version: "10" }).setToken(
-      process.env.DISCORD_TOKEN as string,
-    );
 
     const commands = [
       new SlashCommandBuilder()
@@ -557,7 +510,7 @@ export function main(): void {
       console.log("Started refreshing application (/) commands.");
 
       await rest.put(
-        Routes.applicationCommands(process.env.CLIENT_ID as string),
+        Routes.applicationCommands(config.clientId),
         { body: commands },
       );
 
@@ -589,342 +542,22 @@ export function main(): void {
           modal.addComponents(actionRow);
 
           await interaction.showModal(modal);
-        } else if (commandName === "set_address") {
-          if (interaction.isChatInputCommand()) {
-            const network = interaction.options.getInteger("network", true);
-            const networkAddress = interaction.options.getString(
-              "address",
-              true,
-            );
-            let address = networkAddress;
-            if (networkAddress.includes(":")) {
-              address = networkAddress.split(":")[1];
-            }
-            assert(address, "Please provide an address");
-            const userId = interaction.user.id;
-            const guildId = interaction.guildId!;
-            if(network === 0){
-              // handle setting all
-              for(const chain of Chains){
-                await userModel.setAddress(userId, guildId, chain.chainId, address);
-              }
-              return interaction.reply({
-                content: `Address ${address} set for ALL supported chains.`,
-                flags: MessageFlags.Ephemeral,
-              });
-            }
-            await userModel.setAddress(userId, guildId, network, address);
-            const chain = ChainsById[network];
-            const chainName = chain ? chain.name : "Unknown Chain";
-            await interaction.reply({
-              content: `Address set for ${chainName} (${network}): ${address}`,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
-        } else if (commandName === "remove_address") {
-          if (interaction.isChatInputCommand()) {
-            const networkAddress = interaction.options.getString(
-              "address",
-              true,
-            );
-            const userId = interaction.user.id;
-            const guildId = interaction.guildId!;
-            const [chainId, address] = networkAddress.split(":");
-            assert(chainId, "Unable to find chain id");
-            const chain = ChainsById[Number(chainId)];
-            const chainName = chain ? chain.name : "Unknown Chain";
-            await userModel.deleteAddress(userId, guildId, Number(chainId)); // Assuming delete method exists
-            await interaction.reply({
-              content: `Address ${address} removed for ${chainName} (${chainId}).`,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
-        } else if (commandName === "list_addresses") {
-          const userId = interaction.user.id;
-          const guildId = interaction.guildId!;
-          const userAddresses = await userModel.getUser(userId, guildId);
-          if (userAddresses.length === 0) {
-            await interaction.reply("No addresses set for any networks.");
-          } else {
-            // Format user's addresses as [[GuildMember, [{chain, address}, ...]]] for renderUsers
-            // Only one user: interaction.member
-            const user = interaction.member;
-            // Defensive fallback for GuildMember - in rare edge cases where interaction.member might not be set, refetch
-            let guildMember = user;
-            assert(
-              guildMember && typeof guildMember.user === "object" && guildMember instanceof GuildMember,
-              "Unable to find guild member"
-            );
-            // need userAddresses as [{chainId, address}], map to [{chain, address}]
-            const addresses = userAddresses
-              .map(({ chainId, address }) => {
-                const chain = ChainsById[chainId];
-                if (!chain) return null;
-                return { chain, address };
-              })
-              .filter((addr): addr is { chain: ChainSummary; address: string } => addr !== null);
-
-            assert(addresses.length > 0,"No addresses found!")
-            const formattedResponse = renderUser(
-              guildMember, addresses
-            );
-            
-            await interaction.reply({
-              content: formattedResponse,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
+        } else if (
+          commandName === "set_address" ||
+          commandName === "remove_address" ||
+          commandName === "list_addresses" ||
+          commandName === "admin_list_missing_addresses"
+        ) {
+          const handled = await handleAddressesCommands(interaction, {
+            userModel,
+          });
+          if (handled) return;
         } else if (commandName === "admin_manage_tokens") {
-            if (
-              !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
-              )
-            ) {
-              await interaction.reply({
-                content: "You do not have permission to use this command.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const guild = interaction.guild;
-            if (!guild) {
-              await interaction.reply({
-                content: "This command can only be used within a guild.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const allTokens = await tokenModel.getTokensByGuild(guild.id)
-            const reply = getAdminManageTokensDisplay({allTokens})
-            await interaction.reply({
-              ...reply,
-              flags: MessageFlags.Ephemeral,
-            });
+          const handled = await handleTokensCommand(interaction, { tokenModel });
+          if (handled) return;
         } else if (commandName === "admin_manage_safes") {
-          if (interaction.isChatInputCommand()) {
-            if (
-              !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
-              )
-            ) {
-              await interaction.reply({
-                content: "You do not have permission to use this command.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-
-            const guild = interaction.guild;
-            if (!guild) {
-              await interaction.reply({
-                content: "This command can only be used within a guild.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const guildId = guild.id;
-            // Fetch all safes for this guild
-            const allSafes = await safeModel.getAllAddresses(guildId);
-            const reply = getAdminManageSafesDisplay({allSafes})
-
-            await interaction.reply({
-              ...reply,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
-        } else if (commandName === "admin_list_missing_addresses") {
-          if (interaction.isChatInputCommand()) {
-            if (
-              !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
-              )
-            ) {
-              await interaction.reply({
-                content: "You do not have permission to use this command.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-
-            const network = interaction.options.getInteger("network", true);
-            const role = interaction.options.getRole("role", false);
-            const channel: GuildTextBasedChannel | null =
-              interaction.options.getChannel("channel", false, [
-                ChannelType.GuildText,
-              ]);
-            const guild = interaction.guild;
-            if (!guild) {
-              await interaction.reply({
-                content: "This command can only be used within a guild.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const guildId = guild.id;
-            const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userModel.getUsersByChain(
-              network,
-              guildId,
-            );
-
-            const usersWithAddresses = new Set(
-              allAddresses.map((addr) => addr.userId),
-            );
-            let usersWithoutAddresses = Array.from(
-              allDiscordUsers.values(),
-            ).filter(
-              (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
-            );
-
-            if (role) {
-              await guild.roles.fetch();
-              const roleMembers = guild.roles.cache.get(role.id)?.members;
-              if (roleMembers && roleMembers.size > 0) {
-                const roleMemberIds = new Set(
-                  roleMembers.map((member) => member.id),
-                );
-                usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                  roleMemberIds.has(user.id),
-                );
-              } else {
-                usersWithoutAddresses = [];
-              }
-            }
-
-            if (channel) {
-              await channel.fetch();
-              const channelMembers = await channel.members;
-              usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                channelMembers.has(user.id),
-              );
-            }
-
-            if (usersWithoutAddresses.length === 0) {
-              await interaction.reply({
-                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[network].name} (${network}).`,
-                flags: MessageFlags.Ephemeral,
-              });
-            } else {
-              const missingAddressList = usersWithoutAddresses
-                .map(
-                  (user, index) =>
-                    `${index + 1}. ${user.displayName}(${user.user.username})`,
-                )
-                .join("\n");
-              const customIdParts = [
-                `notifyMissing`,
-                `chain:${network}`,
-                role ? `role:${role.id}` : `role:none`,
-                channel ? `channel:${channel.id}` : `channel:none`,
-              ];
-              const customId = customIdParts.join("_");
-              const notifyButton =
-                new ActionRowBuilder<ButtonBuilder>().addComponents(
-                  new ButtonBuilder()
-                    .setCustomId(customId)
-                    .setLabel("Announce to Missing Users")
-                    .setStyle(ButtonStyle.Secondary),
-                );
-              await interaction.reply({
-                content: `Users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} without addresses for ${ChainsById[network].name} (${network}):\n${missingAddressList}`,
-                components: [notifyButton],
-                flags: MessageFlags.Ephemeral,
-              });
-            }
-          }
-        } else if (commandName === "admin_notify_missing_addresses") {
-          if (interaction.isChatInputCommand()) {
-            if (
-              !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
-              )
-            ) {
-              await interaction.reply({
-                content: "You do not have permission to use this command.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-
-            const network = interaction.options.getInteger("network", true);
-            const role = interaction.options.getRole("role", false);
-            const channel: GuildTextBasedChannel | null =
-              interaction.options.getChannel("channel", false, [
-                ChannelType.GuildText,
-              ]);
-            const guild = interaction.guild;
-            if (!guild) {
-              await interaction.reply({
-                content: "This command can only be used within a guild.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const guildId = guild.id;
-            const allDiscordUsers = await guild.members.fetch();
-            const allAddresses = await userModel.getUsersByChain(
-              network,
-              guildId,
-            );
-
-            const usersWithAddresses = new Set(
-              allAddresses.map((addr) => addr.userId),
-            );
-            let usersWithoutAddresses = Array.from(
-              allDiscordUsers.values(),
-            ).filter(
-              (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
-            );
-
-            if (role) {
-              await guild.roles.fetch();
-              const roleMembers = guild.roles.cache.get(role.id)?.members;
-              if (roleMembers && roleMembers.size > 0) {
-                const roleMemberIds = new Set(
-                  roleMembers.map((member) => member.id),
-                );
-                usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                  roleMemberIds.has(user.id),
-                );
-              } else {
-                usersWithoutAddresses = [];
-              }
-            }
-
-            if (channel) {
-              await channel.fetch();
-              const channelMembers = await channel.members;
-              usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-                channelMembers.has(user.id),
-              );
-            }
-
-            if (usersWithoutAddresses.length === 0) {
-              await interaction.reply({
-                content: `All users${role ? ` with role ${role.name}` : ""}${channel ? ` in channel ${channel.name}` : ""} have addresses set for ${ChainsById[network].name} (${network}).`,
-                flags: MessageFlags.Ephemeral,
-              });
-            } else {
-              const mentions = usersWithoutAddresses
-                .map((user) => `<@${user.id}>`)
-                .join(" ");
-              const chainName = ChainsById[network]?.name || "Unknown Chain";
-              const button =
-                new ActionRowBuilder<ButtonBuilder>().addComponents(
-                  new ButtonBuilder()
-                    .setCustomId(`addAddress_${network}`)
-                    .setLabel(`📥 Add ${chainName} (${network}) address`)
-                    .setStyle(ButtonStyle.Primary),
-                );
-              await interaction.reply({
-                content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
-                components: [button],
-                allowedMentions: {
-                  users: usersWithoutAddresses.map((user) => user.id),
-                },
-              });
-            }
-          }
+          const handled = await handleSafesCommand(interaction, { safeModel });
+          if (handled) return;
         } else if (commandName === "admin_list_addresses") {
           if (interaction.isChatInputCommand()) {
             if (
@@ -996,7 +629,7 @@ export function main(): void {
             if (guild.members.cache.size === 0) {
               await guild.members.fetch();
             }
-            let allDiscordUsers = guild.members.cache;
+            const allDiscordUsers = guild.members.cache;
             
 
             // Filter users based on optional filters
@@ -1176,271 +809,17 @@ export function main(): void {
               flags: MessageFlags.Ephemeral,
             });
           }
-        } else if (commandName === "admin_safe_payout") {
-          // Updated command logic
-          if (
-            !interaction.memberPermissions?.has(
-              PermissionsBitField.Flags.Administrator,
-            )
-          ) {
-            await interaction.reply({
-              content: "You do not have permission to use this command.",
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
-          if (interaction.isChatInputCommand()) {
-            const tokenAddressInput = interaction.options.getString(
-              "token_address",
-              true,
-            );
-            const safeAddressInput = interaction.options.getString(
-              "safe_address",
-              true,
-            );
-            const donateAmount =
-              interaction.options.getNumber("donate_amount") ?? 0;
-            const [networkPrefix, safeAddress] = safeAddressInput.split(":");
-            const chain = Chains.find(
-              (chain) =>
-                chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
-            );
-            if (!chain) {
-              await interaction.reply({
-                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            let tokenAddress = tokenAddressInput;
-            if (tokenAddressInput.includes(":")) {
-              const [tokenNetworkPrefix, maybeTokenAddress] =
-                tokenAddressInput.split(":");
-              const chain = Chains.find(
-                (chain) =>
-                  chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
-              );
-              if (!chain) {
-                await interaction.reply({
-                  content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
-                  flags: MessageFlags.Ephemeral,
-                });
-                return;
-              }
-              assert(
-                tokenNetworkPrefix === networkPrefix,
-                "Token network must match the safe network",
-              );
-              tokenAddress = maybeTokenAddress;
-            }
-            const chainId = chain.chainId;
-            const networkName = chain.name;
-            const viemChain = getViemChain(chainId);
-
-            assert(viemChain, `Chain ${chainId} not found`);
-            const erc20 = viem.getContract({
-              address: viem.getAddress(tokenAddress),
-              abi: ERC20_ABI,
-              client: viem.createPublicClient({
-                chain: viemChain,
-                transport: viem.http(),
-              }),
-            });
-            const [name, symbol, decimals] = await Promise.all([
-              erc20.read.name(),
-              erc20.read.symbol(),
-              erc20.read.decimals(),
-            ]);
-            // Show instructions and a button to open the modal
-            const instructions = [
-              `**Safe Payout Preparation**`,
-              `Network: \`${networkName}\``,
-              `Safe Address: \`${safeAddress}\``,
-              `Token Address: \`${tokenAddress}\``,
-              `Token Name: \`${name}\``,
-              `Token Symbol: \`${symbol}\``,
-              `Token Decimals: \`${decimals}\``,
-              ``,
-              `Please click the button below to paste your CSV data.`,
-              `The CSV should be in the format:`,
-              `\`discordid OR unique name OR display name,amount\` (one per line)`,
-              ``,
-              `After submitting, you will receive a file to download.`,
-            ].join("\n");
-
-            const safeId = getId();
-            safeGenerations[safeId] = {
-              id: safeId,
-              chainId,
-              safeAddress,
-              tokenAddress,
-              decimals,
-              tokenName: name,
-              tokenSymbol: symbol,
-              donateAmount,
-            };
-            const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`safePayoutModal_${safeId}`)
-                .setLabel("Paste CSV Data")
-                .setStyle(ButtonStyle.Primary),
-            );
-
-            await interaction.reply({
-              content: instructions,
-              components: [button],
-              flags: MessageFlags.Ephemeral,
-            });
-          }
-        } else if (commandName === "admin_csv_airdrop_payout") {
-          if (
-            !interaction.memberPermissions?.has(
-              PermissionsBitField.Flags.Administrator,
-            )
-          ) {
-            await interaction.reply({
-              content: "You do not have permission to use this command.",
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-          if (!interaction.isChatInputCommand()) return;
-
-          const chainId = interaction.options.getInteger("network", true);
-          const chain = ChainsById[chainId];
-          assert(chain, "Network not found");
-          const donateAmount =
-            interaction.options.getNumber("donate_amount") ?? 0;
-          const token = interaction.options.getString("token_address", true);
-          const tokenAddressInput = interaction.options.getString(
-            "token_address",
-            true,
-          );
-          let tokenAddress = tokenAddressInput;
-          if (tokenAddressInput.includes(":")) {
-            const [tokenNetworkPrefix, maybeTokenAddress] =
-              tokenAddressInput.split(":");
-            const chain = Chains.find(
-              (chain) =>
-                chain.shortName.toLowerCase() ===
-                tokenNetworkPrefix.toLowerCase(),
-            );
-            if (!chain) {
-              await interaction.reply({
-                content: `Please use the full safe address which includes a chain specific prefix, like "eth:0x123...", valid prefixes: ${Chains.map((x) => x.shortName).join(", ")}`,
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            assert(
-              tokenNetworkPrefix === chain.shortName,
-              "Token network must match the safe network",
-            );
-            tokenAddress = maybeTokenAddress;
-          }
-
-          const instructions = [
-            `**CSV Airdrop (Safe plugin) Preparation**`,
-            `Network: \`${chain.name}\``,
-            ``,
-            `Please click the button below to paste your CSV data.`,
-            `The CSV should be in the format:`,
-            `\`discordid OR unique name OR display name,amount\` (one per line)`,
-            ``,
-            `After submitting, you will receive a CSV file to download.`,
-          ].join("\n");
-
-          const viemChain = getViemChain(chainId);
-
-          assert(viemChain, `Chain ${chainId} not found`);
-          const erc20 = viem.getContract({
-            address: viem.getAddress(tokenAddress),
-            abi: ERC20_ABI,
-            client: viem.createPublicClient({
-              chain: viemChain,
-              transport: viem.http(),
-            }),
+        } else if (
+          commandName === "admin_safe_payout" ||
+          commandName === "admin_csv_airdrop_payout" ||
+          commandName === "admin_disperse_payout"
+        ) {
+          const handled = await handlePayoutCommands(interaction, {
+            safeGenerations,
+            dispersePayouts,
+            csvAirdropPayouts,
           });
-          const [name, symbol, decimals] = await Promise.all([
-            erc20.read.name(),
-            erc20.read.symbol(),
-            erc20.read.decimals(),
-          ]);
-          const id = getId();
-          const payout = {
-            id,
-            chainId,
-            donateAmount,
-            tokenAddress,
-            decimals,
-            tokenName: name,
-            tokenSymbol: symbol,
-            type: "erc20",
-          };
-          csvAirdropPayouts[id] = payout;
-          const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`csvAirdropPayoutModal_${id}`)
-              .setLabel("Paste CSV Data")
-              .setStyle(ButtonStyle.Primary),
-          );
-          await interaction.reply({
-            content: instructions,
-            components: [button],
-            flags: MessageFlags.Ephemeral,
-          });
-        } else if (commandName === "admin_disperse_payout") {
-          // New command logic for disperse payout
-          if (
-            !interaction.memberPermissions?.has(
-              PermissionsBitField.Flags.Administrator,
-            )
-          ) {
-            await interaction.reply({
-              content: "You do not have permission to use this command.",
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
-          if (interaction.isChatInputCommand()) {
-            const chainId = interaction.options.getInteger("network", true);
-            const networkName = ChainsById[chainId]?.name || "Unknown Network";
-            const donateAmount =
-              interaction.options.getNumber("donate_amount") ?? 0;
-
-            const instructions = [
-              `**Disperse Payout Preparation**`,
-              `Network: \`${networkName}\``,
-              ``,
-              `Please click the button below to paste your CSV data.`,
-              `The CSV should be in the format:`,
-              `\`discordid OR unique name OR display name,amount\` (one per line)`,
-              ``,
-              `After submitting, you will receive a CSV file to download.`,
-            ].join("\n");
-
-            const disperseId = getId();
-            const dispersePayout = {
-              id: disperseId,
-              chainId,
-              donateAmount,
-            };
-            dispersePayouts[disperseId] = dispersePayout;
-            const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`dispersePayoutModal_${disperseId}`)
-                .setLabel("Paste CSV Data")
-                .setStyle(ButtonStyle.Primary),
-            );
-
-            await interaction.reply({
-              content: instructions,
-              components: [button],
-              flags: MessageFlags.Ephemeral,
-            });
-          }
+          if (handled) return;
         } else if (commandName === "admin_set_safe_address") {
           // Updated command logic
           if (
@@ -1733,49 +1112,8 @@ export function main(): void {
     } else if (interaction.isAutocomplete()) {
       const focusedOption = interaction.options.getFocused(true);
       if (focusedOption.name === "address") {
-        const userId = interaction.user.id;
-        const guildId = interaction.guildId!;
-        const userAddresses = await userModel.getUser(userId, guildId);
-
-        // Check if a network option is set
-        const networkOption = interaction.options.get("network");
-        let filteredAddresses = userAddresses;
-
-        if (networkOption?.value) {
-          const selectedNetwork = Number(networkOption.value);
-          filteredAddresses = userAddresses.filter(
-            ({ chainId }) => chainId === selectedNetwork,
-          );
-        }
-
-        const userInput = interaction.options.getString("address", false) || "";
-        let maybeAddress: string | undefined;
-        if (userInput) {
-          maybeAddress = userInput.split(":")[1] ?? userInput;
-        }
-
-        if (maybeAddress) {
-          // Filter addresses based on user input, assuming input is the start of the address
-          filteredAddresses = filteredAddresses.filter(({ address }) =>
-            address.toLowerCase().startsWith(maybeAddress.toLowerCase()),
-          );
-        }
-        console.log({ maybeAddress, filteredAddresses, userInput });
-
-        const choices = filteredAddresses.map(({ chainId, address }) => {
-          const chain = ChainsById[chainId];
-          const chainName = chain ? chain.name : "Unknown Chain";
-          return {
-            name: `${chainName} (${chainId}): ${address}`,
-            value: `${chainId}:${address}`,
-          };
-        });
-
-        try {
-          await interaction.respond(choices);
-        } catch (err) {
-          console.error(err, "Error autocomplete address");
-        }
+        const handled = await handleAddressAutocomplete(interaction, { userModel });
+        if (handled) return;
       } else if (focusedOption.name === "safe_address") {
         const guildId = interaction.guildId!;
         let safeAddresses = await safeModel.getUser(guildId, guildId);
@@ -1813,507 +1151,26 @@ export function main(): void {
           console.error(err, "Error autocomplete safe address");
         }
       } else if (focusedOption.name === "token_address") {
-        const guildId = interaction.guildId!;
-
-        const userInput =
-          interaction.options.getString("token_address", false) || "";
-        const [inputNetwork, inputAddress] = userInput.split(":");
-
-        const tokens = await tokenModel.getTokensByGuild(guildId);
-        console.log("guild tokens", tokens, inputNetwork, inputAddress);
-
-        const filteredTokens = tokens.filter(({ address, chainId }) => {
-          const matchesNetwork = inputNetwork ? chainId !== undefined : true;
-
-          const matchesAddress = inputAddress
-            ? address.toLowerCase().startsWith(inputAddress.toLowerCase())
-            : true;
-
-          return matchesNetwork && matchesAddress;
-        });
-
-        const choices = filteredTokens.map(({ address, symbol, chainId }) => {
-          const chain = ChainsById[chainId];
-          const chainName = chain ? chain.name : "Unknown Chain";
-          return {
-            name: `${chainName}:${symbol}:${address}`,
-            value: `${chain ? chain.shortName : "unknown"}:${address}`,
-          };
-        });
-
-        try {
-          await interaction.respond(choices);
-        } catch (err) {
-          console.error(err, "Error autocomplete token address");
-        }
+        const handled = await handleTokenAutocomplete(interaction, { tokenModel });
+        if (handled) return;
       }
     } else if (interaction.isModalSubmit()) {
       try {
-        if(interaction.customId.startsWith("manageTokens_add")) {
-          // CustomId format: "manageTokens_add_<chainId>"
-          const parts = interaction.customId.split("_");
-          const chainId = parts.length > 2 ? parts[2] : undefined;
-          assert(chainId, 'Chain not found');
-          
-          // Check that chainId is valid
-          const chain = ChainsById[Number(chainId)];
-          assert(chain, `Network not found for chainId: ${chainId}`);
-
-          // Get token address from modal input
-          const tokenAddress = interaction.fields.getTextInputValue("tokenAddress");
-          assert(tokenAddress, "Token address is required");
-
-          // Add token for the guild in the db
-          const guildId = interaction.guildId;
-          assert(guildId, "Guild not found");
-          const viemChain = getViemChain(chain.chainId);
-          const tokenInfo = await fetchErc20TokenInfo({chainId:chain.chainId,tokenAddress,guildId})
-
-          // Save the token (simulate as Models.Token: {address,chainId})
-          await tokenModel.setToken(tokenInfo);
-
-          // Compose a row with a "Manage More Tokens" button
-          const manageMoreRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId("manageTokens")
-              .setLabel("Manage More Tokens")
-              .setStyle(ButtonStyle.Primary)
-          );
-
-          // Optionally show success message or refresh display
-          await interaction.reply({
-            content: [
-              `✅ Token added to **${chain.name}**!`,
-              "",
-              `**Name:** ${tokenInfo.name}`,
-              `**Symbol:** ${tokenInfo.symbol}`,
-              `**Decimals:** ${tokenInfo.decimals}`,
-              `**Address:** \`${tokenInfo.address}\``
-            ].join("\n"),
-            flags: MessageFlags.Ephemeral,
-            components: [manageMoreRow],
-          });
+        if (await handleTokensModalSubmit(interaction, { tokenModel })) {
           return;
         }
-        if(interaction.customId.startsWith("manageSafe_addressModal")){
-          const safeAddress = interaction.fields.getTextInputValue('safeAddress')
-          const [networkPrefix, address] = safeAddress.split(":");
-          assert(networkPrefix,'Safe address requires network prefix')
-          const addrChain = Chains.find(
-            (chain) =>
-              chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
-          );
-          assert(addrChain,`Network not found with prefix ${networkPrefix}. Supply Safe address in the form of chain:address.`)
-          assert(address,'Safe address requires address. Supply Safe address in the form of chain:address.')
-          const guildId = interaction.guildId!;
-          assert(guildId,"Guild not found")
-
-          // Check if an address already exists for this guild & chain
-          const existingSafeAddress = await safeModel.getAddress(guildId, guildId, addrChain.chainId);
-          if(existingSafeAddress === address){
-            const allSafes = await safeModel.getAllAddresses(guildId);
-            const reply = getAdminManageSafesDisplay({allSafes})
-            reply.content = `Safe address is already set to ${address} on ${addrChain.name}!\n\n` + reply.content
-            await (interaction as any).update({
-              ...reply,
-            });
-            return;
-          }
-
-
-          // Prepare the confirmation buttons
-          const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`confirmSetSafe_${addrChain.chainId}_${address}`)
-              .setLabel(existingSafeAddress
-                ? `Override existing Safe address`
-                : `Set as Safe address`)
-              .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-              .setCustomId(`cancelSetSafe`)
-              .setLabel(`Cancel`)
-              .setStyle(ButtonStyle.Secondary)
-          );
-
-          let content;
-          if (existingSafeAddress) {
-            content = `A Safe address is already set for **${addrChain.name}**:\n\`${existingSafeAddress}\`\n\nDo you want to override it with:\n\`${address}\` ?`;
-          } else {
-            content = `You are about to set the following Safe address for **${addrChain.name}**:\n\`${address}\`\n\nDo you want to proceed?`;
-          }
-
-          await (interaction as any).update({
-            content,
-            components: [confirmRow],
-            flags: MessageFlags.Ephemeral,
-          });
+        if (await handleSafesModalSubmit(interaction, { safeModel })) {
           return;
-
-          // const allSafes = await safeModel.getAllAddresses(guildId);
-          // const reply = getAdminManageSafesDisplay({allSafes})
-          // await (interaction as any).update({
-          //   ...reply,
-          // });
-
-        } else if(interaction.customId.startsWith("addSafeModal_")){
-          const [_, payoutId] = interaction.customId.split("_");
-          const payout = payouts[payoutId];
-          if (!payout) {
-            await interaction.reply({
-              content: `Unable to find payout list, try searching again`,
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-          const foundChain = Chains.find(
-            (chain) => chain.chainId === payout.chainId,
-          );
-          assert(foundChain, "Chain not found");
-          const safeAddress = interaction.fields.getTextInputValue('safeAddress')
-          const [networkPrefix, address] = safeAddress.split(":");
-          if(networkPrefix && address){
-            const addrChain = Chains.find(
-              (chain) =>
-                chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
-            );
-            if (addrChain?.chainId !== foundChain.chainId) {
-              await interaction.reply({
-                content: `Safe network (${addrChain?.name}) does not match selected network (${foundChain.name})`,
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-          }
-          const guildId = interaction.guildId!;
-          const actualAddress = address ?? safeAddress;
-          await safeModel.setAddress(
-            guildId,
-            guildId,
-            foundChain.chainId,
-            actualAddress,
-          );
-          payout.safeAddress = actualAddress;
-          const renderSetup = renderSafePayoutSetupRow(payout);
-          await  (interaction as any).update({
-              embeds: [
-                {
-                  title: `✅ Safe Added for ${foundChain.name}`,
-                  color: 0x2ecc71,
-                  description: `**Safe Address:**\n\`${actualAddress}\``,
-                  fields: [
-                    {
-                      name: "Chain",
-                      value: `${foundChain.name} (${foundChain.chainId})`,
-                      inline: true,
-                    },
-                  ],
-                  footer: {
-                    text: "Safe information saved successfully.",
-                  },
-                },
-              ],
-              ...renderSetup,
+        }
+        if (
+          await handlePayoutsModalSubmit(interaction, {
+            client,
+            userModel,
+            tokenModel,
+            safeModel,
+            stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
           })
-        }else if(interaction.customId.startsWith("addTokenModal_")){
-          const [_, payoutId] = interaction.customId.split("_");
-          const payout = payouts[payoutId];
-          if (!payout) {
-            await interaction.reply({
-              content: `Unable to find payout list, try searching again`,
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-          const foundChain = Chains.find(
-            (chain) => chain.chainId === payout.chainId,
-          );
-          assert(foundChain, "Chain not found");
-          const tokenAddress = interaction.fields.getTextInputValue('tokenAddress')
-          const guildId = interaction.guildId!;
-          const viemChain = getViemChain(foundChain.chainId);
-          assert(viemChain, `Chain ${foundChain.chainId} not found`);
-
-          const erc20 = viem.getContract({
-            address: viem.getAddress(tokenAddress),
-            abi: ERC20_ABI,
-            client: viem.createPublicClient({
-              chain: viemChain,
-              transport: viem.http(),
-            }),
-          });
-          const [name, symbol, decimals] = await Promise.all([
-            erc20.read.name(),
-            erc20.read.symbol(),
-            erc20.read.decimals(),
-          ]);
-          const tokenInfo = {
-            guildId,
-            chainId: foundChain.chainId,
-            name,
-            symbol,
-            decimals,
-            address: tokenAddress,
-          };
-          await tokenModel.setToken(tokenInfo);
-          const renderSetup = renderSafePayoutSetupRow(payout);
-          await (interaction as any).update({
-            embeds: [
-              {
-                title: `✅ Token Added for ${foundChain.name}`,
-                color: 0x2ecc71,
-                description: `**Token Address:**\n\`${tokenAddress}\``,
-                fields: [
-                  {
-                    name: "Chain",
-                    value: `${foundChain.name} (${foundChain.chainId})`,
-                    inline: true,
-                  },
-                  {
-                    name: "Name",
-                    value: `${name}`,
-                    inline: true,
-                  },
-                  {
-                    name: "Symbol",
-                    value: `${symbol}`,
-                    inline: true,
-                  },
-                  {
-                    name: "Decimals",
-                    value: `${decimals}`,
-                    inline: true,
-                  },
-                ],
-                footer: {
-                  text: "Token information saved successfully.",
-                },
-              },
-            ],
-            ...renderSetup,
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-        // --- BEGIN generic payout modal handling ---
-        if (interaction.customId === "userInputModal") {
-          const userInput = interaction.fields.getTextInputValue("userInput");
-          await interaction.reply(`You entered: ${userInput}`);
-        } else if (interaction.customId.startsWith("addAddress_")) {
-          const network = parseInt(interaction.customId.split("_")[1], 10);
-          const address = interaction.fields.getTextInputValue("addressInput");
-          const userId = interaction.user.id;
-          const guildId = interaction.guildId!;
-
-          await userModel.setAddress(userId, guildId, network, address);
-          const chain = ChainsById[network];
-          const chainName = chain ? chain.name : "Unknown Chain";
-          await interaction.reply({
-            content: `Address set for ${chainName} (${network}): ${address}`,
-            flags: MessageFlags.Ephemeral,
-          });
-        } else if (interaction.customId.startsWith("payoutModal_")) {
-          // await interaction.deferReply({ ephemeral: true });
-          const [_, payoutId] = interaction.customId.split("_");
-          const payout = payouts[payoutId];
-          if (!payout) {
-            await interaction.reply({
-              content: `Unable to find payout list, try searching again`,
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
-          const csvData = interaction.fields.getTextInputValue("csvInput");
-          assert(csvData,'Payout amounts not found')
-          payout.csvData = csvData
-
-          const row =
-            new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-              new StringSelectMenuBuilder()
-                .setCustomId(`payoutChain_${payoutId}`)
-                .setPlaceholder("Choose a network")
-                .addOptions(
-                  Object.values(Chains).map((chain) => ({
-                    label: `${chain.name} (${chain.chainId})`,
-                    value: `${chain.chainId}`,
-                    description: chain.shortName
-                      ? `${chain.shortName}`
-                      : undefined,
-                  }))
-                )
-            );
-          await interaction.reply({
-            content: "Select chain for payout",
-            components: [row],
-            flags: MessageFlags.Ephemeral,
-          });
-
-          return;
-        } else if (interaction.customId.startsWith("safePayoutModal_")) {
-          await interaction.deferReply({ ephemeral: true });
-          // Modal submit for admin_safe_payout
-          const [_, safeId] = interaction.customId.split("_");
-          const safeData = safeGenerations[safeId];
-          if (!safeData) {
-            await interaction.reply({
-              content: "Safe data not found",
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-          assert(safeData.safeAddress, 'Safe address not found');
-          assert(safeData.tokenAddress, 'Token address not found');
-          assert(typeof safeData.decimals !== 'undefined', 'Decimals not found');
-          const csvData = interaction.fields.getTextInputValue("csvInput");
-          // Parse CSV lines into [id, amount] pairs
-          const lines = csvData
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0 && !line.startsWith("#"));
-
-          const errors: string[] = [];
-          const userIdToAmount: Record<string, string> = {};
-          const idToInput: Record<string, string> = {};
-          const userIdToUser: Record<string, User> = {};
-
-          // 1. Resolve Discord users
-          for (let i = 0; i < lines.length; i++) {
-            const [idRaw, amountRaw] = lines[i]
-              .split(/[\t,= ]/)
-              .map((s) => s.trim());
-
-            if (!idRaw || !amountRaw) {
-              errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);
-              continue;
-            }
-            idToInput[idRaw] = lines[i];
-            try {
-              const user = await resolveDiscordUser(
-                client,
-                idRaw,
-                interaction.guildId!
-              );
-              if (!user) {
-                errors.push(`Line ${i + 1}: Could not resolve user "${idRaw}"`);
-                continue;
-              }
-              userIdToAmount[user.id] = amountRaw;
-              userIdToUser[user.id] = user;
-            } catch (e) {
-              errors.push(`Line ${i + 1}: Error resolving user "${idRaw}"`);
-              continue;
-            }
-          }
-
-          // 2. Lookup addresses for resolved users
-          const addressEntries: Array<[string, string]> = [];
-          for (const userId in userIdToAmount) {
-            try {
-              // safeData should contain: { chainId, safeAddress, erc20Address, decimals }
-              const address = await userModel.getAddress(
-                userId,
-                interaction.guildId!,
-                safeData.chainId
-              );
-              if (!address) {
-                const user = userIdToUser[userId];
-                const userInfo = user
-                  ? `${user.username}#${user.discriminator} (${user.id})`
-                  : `User ID: ${userId}`;
-                errors.push(
-                  `${userInfo}: No address found for chain ${safeData.chainId}`
-                );
-                continue;
-              }
-              addressEntries.push([address, userIdToAmount[userId]]);
-            } catch (e) {
-              const user = userIdToUser[userId];
-              const userInfo = user
-                ? `${user.username}#${user.discriminator} (${user.id})`
-                : `User ID: ${userId}`;
-              errors.push(`${userInfo}: Error looking up address`);
-              continue;
-            }
-          }
-          if (
-            process.env.DONATE_ADDRESS &&
-            viem.isAddress(process.env.DONATE_ADDRESS) &&
-            safeData.donateAmount &&
-            safeData.donateAmount > 0
-          ) {
-            addressEntries.push([
-              process.env.DONATE_ADDRESS,
-              safeData.donateAmount.toString(),
-            ]);
-          }
-
-          // 3. Generate Safe transaction batch
-          const batchResult = generateSafeTransactionBatch({
-            entries: addressEntries,
-            chainId: safeData.chainId,
-            safeAddress: safeData.safeAddress,
-            erc20Address: safeData.tokenAddress,
-            decimals: safeData.decimals,
-            description: `Generated for safe ${safeData.safeAddress}`,
-          });
-
-          // 4. Combine errors from batchResult
-          const allErrors = [...errors, ...(batchResult.errors || [])];
-
-          // 5. Reply to user with results
-          const batchJson = JSON.stringify(batchResult.batch, null, 2);
-          const now = new Date();
-          const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-          const files = [
-            {
-              name: `safe_batch_${dateStr}.json`,
-              attachment: Buffer.from(batchJson, "utf-8"),
-            },
-          ];
-          const chainName =
-            ChainsById[safeData.chainId]?.name ?? "Unknown Chain";
-          const tokenName = safeData.tokenName ?? "Unknown Token";
-          const tokenSymbol = safeData.tokenSymbol ?? "Unknown Token Symbol";
-          let content = `✅ SAFE JSON file generated for ${addressEntries.length} entries on ${chainName} using ${tokenName} (${tokenSymbol}).`;
-          if (safeData.donateAmount > 0)
-            content += `\nYou are donating ${safeData.donateAmount.toFixed(4)} ${tokenSymbol}, thank you! ❤️`;
-          content += `\n💸 ___Total amount to transfer___: **${batchResult.totalAmountFormatted} ${tokenSymbol}**`;
-          if (allErrors.length > 0) {
-            content += `\n\n⚠️ Some issues were found:\n\`\`\`\n${allErrors.join("\n")}\n\`\`\``;
-          }
-          await interaction.editReply({
-            content,
-            files,
-          });
-        } else if (interaction.customId.startsWith("csvAirdropPayoutModal_")) {
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-          const [_, payoutId] = interaction.customId.split("_");
-          const payoutData = csvAirdropPayouts[payoutId];
-          assert(payoutData, "Unable to find original request, try again");
-          const { chainId, donateAmount } = payoutData;
-          const csvData = interaction.fields.getTextInputValue("csvInput");
-          const guildId = interaction.guildId;
-          assert(guildId, "Guild not found");
-          await interaction.editReply({
-            content:"Not supported yet...",
-          });
-          return;
-
-        } else if (interaction.customId.startsWith("dispersePayoutModal_")) {
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-          // Modal submit for admin_disperse_payout
-          const [_, disperseId] = interaction.customId.split("_");
-          const payoutData = dispersePayouts[disperseId];
-          assert(payoutData, "Unable to find original request, try again");
-          const { chainId, donateAmount } = payoutData;
-          const csvData = interaction.fields.getTextInputValue("csvInput");
-          const guildId = interaction.guildId;
-          assert(guildId, "Guild not found");
-          const {addressEntries, errors} = await parseRecipientsCsvAndResolveAddresses({client,csvData,guildId,userModel,chainId})
-          const {file,description} = dispersePayout({addressEntries,chainId,donateAmount,donateAddress:process.env.DONATE_ADDRESS, errors})
-          await interaction.editReply({
-            content:description,
-            files:[file],
-          });
+        ) {
           return;
         }
       } catch (error) {
@@ -2343,115 +1200,24 @@ export function main(): void {
         }
       }
     } else if (interaction.isButton()) {
-      if(interaction.customId.startsWith("manageTokens")){
-        const guild = interaction.guild;
-        if (!guild) {
-          await interaction.reply({
-            content: "This command can only be used within a guild.",
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const allTokens = await tokenModel.getTokensByGuild(guild.id)
-        if (interaction.customId.startsWith("manageTokens_add")) {
-          // CustomId format: "manageTokens_add_<chainId>" or just "manageTokens_add"
-          const parts = interaction.customId.split("_");
-          const chainId = parts.length > 2 ? parts[2] : undefined; // The 3rd part is chainId if present
-          assert(chainId,'Chain not found')
-
-          // Show modal asking for the token address
-          const modal = new ModalBuilder()
-            .setCustomId(`manageTokens_add_${chainId}`)
-            .setTitle(`Add Token Address${chainId ? ` (Chain ID: ${chainId})` : ''}`);
-
-          const addressInput = new TextInputBuilder()
-            .setCustomId("tokenAddress")
-            .setLabel("Token Address")
-            .setPlaceholder("0x...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput)
-          );
-
-          await interaction.showModal(modal);
-          return;
-        }
-        // user selected network + remove token button
-        if(interaction.customId.startsWith("manageTokens_remove")){
-          const parts = interaction.customId.split("_");
-          const chainId = parts.length > 2 ? parts[2] : undefined; // The 3rd part is chainId if present
-          assert(chainId,'No chain selected');
-          const reply = tokenRemovalSelectionDisplay({
-            chainId:Number(chainId),
-            allTokens,
-          })
-          await interaction.update(reply)
-          return;
-        }
-        if(interaction.customId.startsWith("manageTokens_confirmRemove_")){
-          // CustomId format: "manageTokens_confirmRemove_<chainId>_<tokenAddress>"
-          const customIdParts = interaction.customId.split("_");
-          const chainId = customIdParts[2];
-          const tokenAddress = customIdParts[3];
-          console.log({chainId,tokenAddress})
-          assert(chainId, 'No chain selected');
-          assert(tokenAddress, 'No token selected');
-          await tokenModel.deleteToken(guild.id, Number(chainId), tokenAddress);
-
-          // Compose a row with a "Manage More Tokens" button
-          const manageMoreRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId("manageTokens")
-              .setLabel("Manage More Tokens")
-              .setStyle(ButtonStyle.Primary)
-          );
-
-          // Fetch the chain name for friendlier message
-          const chainName = ChainsById[Number(chainId)]?.name ?? `Chain ID ${chainId}`;
-
-          await interaction.update({
-            content: `✅ Token has been deleted from **${chainName}**.`,
-            components: [manageMoreRow],
-          });
-          return;
-        }
-        const reply = getAdminManageTokensDisplay({allTokens})
-        await interaction.update(reply)
+      if (await handleTokensButton(interaction, { tokenModel })) {
         return;
-      }else if(interaction.customId.startsWith("cancelSetSafe")){
-        const guildId = interaction.guildId!;
-        assert(guildId,"Guild not found")
-        const allSafes = await safeModel.getAllAddresses(guildId);
-        const reply = getAdminManageSafesDisplay({allSafes})
-        await (interaction as any).update({
-          ...reply,
-        });
-      } else if(interaction.customId.startsWith("confirmSetSafe")){
-          const guildId = interaction.guildId!;
-          assert(guildId,"Guild not found")
-
-        const customIdParts = interaction.customId.split("_");
-        // customIdParts[1] = chainId, customIdParts[2] = address (may contain underscores/colons if address is weird)
-        const chainId = Number(customIdParts[1]);
-        // The address may itself contain underscores if it's an ENS or some funky format, so rejoin everything after the chainId:
-        const address = customIdParts.slice(2).join("_");
-        assert(chainId,'Unable to find chain id')
-        assert(address,'Unable to find address')
-        await safeModel.setAddress(
-          guildId,
-          guildId,
-          Number(chainId),
-          address,
-        );
-        const allSafes = await safeModel.getAllAddresses(guildId);
-        const reply = getAdminManageSafesDisplay({allSafes})
-        reply.content = `Safe address changed to ${address}!\n` + reply.content
-        await (interaction as any).update({
-          ...reply,
-        });
-      }else if(interaction.customId.startsWith("manageSafe")){
+      }
+      if (await handleSafesButton(interaction, { safeModel })) {
+        return;
+      }
+      if (
+        await handlePayoutsButton(interaction, {
+          client,
+          userModel,
+          tokenModel,
+          safeModel,
+          stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+        })
+      ) {
+        return;
+      }
+      if(interaction.customId.startsWith("manageSafe")){
         // handle cancel logic
         if(interaction.customId.startsWith("manageSafe_cancel")){
           const guildId = interaction.guildId;
@@ -2468,7 +1234,7 @@ export function main(): void {
           assert(guildId, "Guild not found");
 
           // Extract chainId and address from the customId: "manageSafe_confirmRemove_<chainId>_<address>"
-          const matches = interaction.customId.match(/^manageSafe_confirmRemove_(\d+)_(.+)$/);
+          const matches = /^manageSafe_confirmRemove_(\d+)_(.+)$/.exec(interaction.customId);
           assert(matches && matches[1] && matches[2], "No Safe selected to remove.");
           const chainId = Number(matches[1]);
           const address = matches[2];
@@ -2696,7 +1462,7 @@ export function main(): void {
         assert(guildId,"Guild not found")
 
         // Get saved tokens for this guild
-        const savedTokens: Array<{ address: string; symbol: string; chainId: number }> = await tokenModel.getTokensByGuild(guildId);
+        const savedTokens: { address: string; symbol: string; chainId: number }[] = await tokenModel.getTokensByGuild(guildId);
         // Filter tokens by selected chain
         const selectedChainId = payout.chainId
         const filteredTokens = savedTokens.filter((t) => t.chainId === selectedChainId);
@@ -2726,23 +1492,6 @@ export function main(): void {
           content: `Select a token to use for payout, or add a new token on ${ChainsById[selectedChainId]?.name ?? selectedChainId}:`,
           components: [tokenSelectRow],
         });
-      }else if (interaction.customId.startsWith("safePayoutButton_")) {
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const csvData = payout.csvData
-        assert(csvData,'Token amounts not found')
-        const guildId = interaction.guildId
-        assert(guildId,"Guild not found")
-        const chainId = payout.chainId
-        assert(chainId, "ChainId not found")
-        await interaction.editReply(renderSafePayoutSetupRow(payout));
       }else if (interaction.customId.startsWith("dispersePayoutButton_")) {
         const [_, payoutId] = interaction.customId.split("_");
         const payout = payouts[payoutId];
@@ -2797,389 +1546,32 @@ export function main(): void {
         await interaction.showModal(modal);
         return
       }
-      if (interaction.customId.startsWith("addAddress_")) {
-        const network = parseInt(interaction.customId.split("_")[1], 10);
-        const chain = ChainsById[network];
-        const chainName = chain ? chain.name : "Unknown Chain";
-        const userId = interaction.user.id;
-        const guildId = interaction.guildId!;
-        // Check if the user already has an address set for this network
-        const existingAddress = await userModel.getAddress(
-          userId,
-          guildId,
-          network,
-        );
-        if (existingAddress) {
-          await interaction.reply({
-            content: `You already have an address set for this network: ${existingAddress}`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-
-        const modal = new ModalBuilder()
-          .setCustomId(`addAddress_${network}`)
-          .setTitle(`Add Address for ${chainName} (${network})`);
-
-        const input = new TextInputBuilder()
-          .setCustomId("addressInput")
-          .setLabel("Enter your address")
-          .setStyle(TextInputStyle.Short);
-
-        const actionRow =
-          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-        modal.addComponents(actionRow);
-
-        await interaction.showModal(modal);
-      } else if (interaction.customId.startsWith("notifyMissing_")) {
-        const [_, networkPart, rolePart, channelPart] =
-          interaction.customId.split("_");
-        const network = Number(networkPart.split("chain:")[1]);
-        const roleId =
-          rolePart !== "role:none" ? rolePart.split("role:")[1] : null;
-        const channelId =
-          channelPart !== "channel:none"
-            ? channelPart.split("channel:")[1]
-            : null;
-        const guild = interaction.guild;
-        if (!guild) {
-          await interaction.reply({
-            content: "This command can only be used within a guild.",
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const guildId = guild.id;
-        const allDiscordUsers = await guild.members.fetch();
-        const allAddresses = await userModel.getUsersByChain(network, guildId);
-
-        const usersWithAddresses = new Set(
-          allAddresses.map((addr) => addr.userId),
-        );
-        let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
-          (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
-        );
-
-        if (roleId) {
-          await guild.roles.fetch();
-          const roleMembers = guild.roles.cache.get(roleId)?.members;
-          if (roleMembers && roleMembers.size > 0) {
-            const roleMemberIds = new Set(
-              roleMembers.map((member) => member.id),
-            );
-            usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-              roleMemberIds.has(user.id),
-            );
-          } else {
-            usersWithoutAddresses = [];
-          }
-        }
-
-        if (channelId) {
-          const channel = await guild.channels.fetch(channelId);
-          assert(
-            channel !== null && channel.isTextBased(),
-            "Must be a text channel",
-          );
-          const channelMembers = (channel as TextChannel).members;
-          usersWithoutAddresses = usersWithoutAddresses.filter((user) =>
-            channelMembers.has(user.id),
-          );
-        }
-
-        if (usersWithoutAddresses.length === 0) {
-          await interaction.reply({
-            content: `All users have addresses set for ${ChainsById[network].name} (${network}).`,
-            flags: MessageFlags.Ephemeral,
-          });
-        } else {
-          const mentions = usersWithoutAddresses
-            .map((user) => `<@${user.id}>`)
-            .join(" ");
-          const chainName = ChainsById[network]?.name || "Unknown Chain";
-          const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`addAddress_${network}`)
-              .setLabel(`📥 Add ${chainName} (${network}) address`)
-              .setStyle(ButtonStyle.Primary),
-          );
-          await interaction.reply({
-            content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
-            components: [button],
-            allowedMentions: {
-              users: usersWithoutAddresses.map((user) => user.id),
-            },
-          });
-        }
-      } else if (interaction.customId.startsWith("safePayoutModal_")) {
-        // interaction.deferReply({ephemeral:true});
-        const [_, safeId] = interaction.customId.split("_");
-
-        const modal = new ModalBuilder()
-          .setCustomId(`safePayoutModal_${safeId}`)
-          .setTitle("Paste Safe Payout CSV");
-
-        const input = new TextInputBuilder()
-          .setCustomId("csvInput")
-          .setLabel("Paste CSV (discordid,amount per line)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true);
-
-        const actionRow =
-          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-        modal.addComponents(actionRow);
-
-        await interaction.showModal(modal);
-      } else if (interaction.customId.startsWith("dispersePayoutModal_")) {
-        const [_, disperseId, chainIdStr] = interaction.customId.split("_");
-        const chainId = parseInt(chainIdStr, 10);
-
-        const modal = new ModalBuilder()
-          .setCustomId(`dispersePayoutModal_${disperseId}_${chainId}`)
-          .setTitle("Paste Disperse Payout CSV");
-
-        const input = new TextInputBuilder()
-          .setCustomId("csvInput")
-          .setLabel("Paste CSV (discordid,amount per line)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true);
-
-        const actionRow =
-          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-        modal.addComponents(actionRow);
-
-        await interaction.showModal(modal);
+      if (await handleAddAddressButton(interaction, { userModel })) {
+        return;
       }
     }
-    if(interaction.isStringSelectMenu()){
-      if(interaction.customId.startsWith('manageTokens_removeSelect_')){
-        // Get the chainId from the customId: "manageTokens_removeSelect_<chainId>"
-        const chainIdStr = interaction.customId.replace('manageTokens_removeSelect_', '');
-        const chainId = parseInt(chainIdStr, 10);
-
-        // Retrieve the selected token address from the select menu values
-        const selectedTokenAddress = interaction.values ? interaction.values[0] : undefined;
-        assert(selectedTokenAddress, "No token selected to remove.");
-        assert(chainId, "Invalid customId format: missing chainId.");
-
-        // Optionally fetch token info for a friendlier prompt (e.g., symbol, name)
-        // We'll try to get the token itself (if stored in db)
-        const guild = interaction.guild;
-        let tokenLabel = selectedTokenAddress;
-        if (guild) {
-          const allTokens = await tokenModel.getTokensByGuild(guild.id);
-          const match = allTokens.find(
-            t => t.address.toLowerCase() === selectedTokenAddress.toLowerCase()
-              && t.chainId === chainId
-          );
-          if (match) {
-            tokenLabel = match.symbol
-              ? `${match.symbol} (${selectedTokenAddress.slice(0, 6)}...${selectedTokenAddress.slice(-4)})`
-              : `${selectedTokenAddress.slice(0, 6)}...${selectedTokenAddress.slice(-4)}`;
-          } else {
-            tokenLabel = `${selectedTokenAddress.slice(0, 6)}...${selectedTokenAddress.slice(-4)}`;
-          }
-        }
-
-        const chainName = ChainsById[chainId]?.name ?? chainId;
-
-        // Compose remove/cancel confirm row
-        const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`manageTokens_confirmRemove_${chainId}_${selectedTokenAddress}`)
-            .setLabel("Yes, Remove")
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId("manageTokens")
-            .setLabel("Cancel")
-            .setStyle(ButtonStyle.Secondary)
-        );
-        await interaction.update({
-          content: `⚠️ Are you sure you want to remove the token **${tokenLabel}** from **${chainName}**?`,
-          components: [confirmRow],
-        });
+    if (interaction.isStringSelectMenu()){
+      if (await handleTokensSelectMenu(interaction, { tokenModel })) {
         return;
       }
-      if(interaction.customId.startsWith('manageTokens_networkSelect')){
-        const guild = interaction.guild;
-        if (!guild) {
-          await interaction.reply({
-            content: "This command can only be used within a guild.",
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const allTokens = await tokenModel.getTokensByGuild(guild.id);
-        const selectedNetwork = interaction.values ? interaction.values[0] : undefined; // Should be chainId string ("1", "137", ...), or "all"
-        const reply = getAdminManageTokensDisplay({
-          allTokens,
-          selectedNetwork,
-        });
-        await interaction.update(reply);
+      if (await handleSafesSelectMenu(interaction, { safeModel })) {
         return;
       }
-      if(interaction.customId.startsWith('manageSafe_removeSelect')){
-        const guildId = interaction.guildId!;
-        assert(guildId, "Guild not found");
-        const selectedValue = interaction.values[0]; // Format: "chainId:address"
-        assert(selectedValue, "No Safe selected to remove.");
-
-        const [chainIdStr, ...addressParts] = selectedValue.split(':');
-        const chainId = Number(chainIdStr);
-        const address = addressParts.join(':');
-        assert(chainId, "Invalid Safe selection: missing chainId.");
-        assert(address, "Invalid Safe selection: missing address.");
-
-        // Show confirmation before deleting
-        const chainName = ChainsById[chainId]?.name ?? chainId;
-        const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`manageSafe_confirmRemove_${chainId}:${address}`)
-            .setLabel("Yes, remove")
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId("manageSafe_cancel")
-            .setLabel("Cancel")
-            .setStyle(ButtonStyle.Secondary)
-        );
-        await interaction.update({
-          content: `⚠️ Are you sure you want to remove the Safe address \`${address}\` for **${chainName}**?`,
-          components: [confirmRow],
-        });
+      if (
+        await handlePayoutsSelectMenu(interaction, {
+          client,
+          userModel,
+          tokenModel,
+          safeModel,
+          stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+        })
+      ) {
         return;
-      }
-      if(interaction.customId.startsWith('payoutChain_')){
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const selectedValue = interaction.values[0]; // Get the selected value
-        assert(selectedValue,'Unable to find Chain Id, try again')
-        payout.chainId = Number(selectedValue)
-        // INSERT_YOUR_CODE
-        // When a network is selected, show 3 buttons: Disperse, CSV Airdrop, and Safe
-        const selectedChainId = Number(selectedValue);
-        // We pass the payoutId and chainId to each button so subsequent handlers know what is being prepared
-        const actionsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`dispersePayoutButton_${payoutId}`)
-            .setLabel("Disperse")
-            .setStyle(ButtonStyle.Primary),
-          // new ButtonBuilder()
-          //   .setCustomId(`csvAirdropPayoutButton_${payoutId}`)
-          //   .setLabel("CSV Airdrop")
-          //   .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(`safePayoutButton_${payoutId}`)
-            .setLabel("Safe")
-            .setStyle(ButtonStyle.Success)
-        );
-
-        // const dispersePayout = {
-        //   id: payoutId,
-        //   chainId:payout.chainId,
-        //   donateAmount:0,
-        // };
-        // dispersePayouts[payoutId] = dispersePayout;
-        await interaction.update({
-          content: `You selected: **${ChainsById[selectedChainId]?.name ?? selectedChainId}**!\nChoose a payout method:`,
-          components: [actionsRow],
-        });
-      }else if(interaction.customId.startsWith('payoutSafeSelect_')){
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const selectedValue = interaction.values[0]; // Get the selected value
-        assert(selectedValue,'Unable to find safe, try again')
-        const guildId = interaction.guildId;
-        assert(guildId, "Guild ID not found");
-        const chainId = payout.chainId;
-        assert(chainId, "Chain ID not found");
-        const chainName = ChainsById[chainId]?.name ?? `Chain ID ${chainId}`;
-        const safeAddress = await safeModel.getAddress(guildId,guildId, chainId);
-        if(selectedValue === "ADD_SAFE"){
-          const modal = new ModalBuilder()
-            .setCustomId(`addSafeModal_${payoutId}`)
-            .setTitle(`Add New Safe for ${chainName}`)
-
-          // Token Address
-          const addressInput = new TextInputBuilder()
-            .setCustomId("safeAddress")
-            .setLabel(`Add Safe Address`)
-            .setPlaceholder(safeAddress ?? "0x...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-          // Modal rows
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput)
-          );
-          await interaction.showModal(modal);
-        }else{
-          const safeAddress = await safeModel.getAddress(guildId,guildId, chainId);
-          assert(safeAddress,'Safe not found')
-          payout.safeAddress = safeAddress 
-          await interaction.update(renderSafePayoutSetupRow(payout));
-        }
-      }else if(interaction.customId.startsWith('payoutTokenSelect_')){
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const selectedValue = interaction.values[0]; // Get the selected value
-        assert(selectedValue,'Unable to find token, try again')
-        const guildId = interaction.guildId;
-        assert(guildId, "Guild ID not found");
-        const chainId = payout.chainId;
-        assert(chainId, "Chain ID not found");
-        const chainName = ChainsById[chainId]?.name ?? `Chain ID ${chainId}`;
-        if(selectedValue === "ADD_TOKEN"){
-          const modal = new ModalBuilder()
-            .setCustomId(`addTokenModal_${payoutId}`)
-            .setTitle(`Add New Token for ${chainName}`)
-
-          // Token Address
-          const addressInput = new TextInputBuilder()
-            .setCustomId("tokenAddress")
-            .setLabel(`Add Token Address`)
-            .setPlaceholder("0x...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-          // Modal rows
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput)
-          );
-
-          await interaction.showModal(modal);
-        }else{
-          const token = await tokenModel.getToken(guildId,chainId, selectedValue);
-          assert(token,'Token not found')
-          payout.tokenAddress = token.address
-          payout.decimals = token.decimals
-          await interaction.update(renderSafePayoutSetupRow(payout));
-        }
       }
     }
   });
 
-  client.login(process.env.DISCORD_TOKEN as string);
+  await start(context);
 
   const api = Api(userModel);
   const apiRpc = RpcFactory(api as any);
@@ -3192,4 +1584,7 @@ export function main(): void {
   });
 }
 
-main();
+main().catch((error) => {
+  console.error("Failed to start Discord bot:", error);
+  process.exitCode = 1;
+});

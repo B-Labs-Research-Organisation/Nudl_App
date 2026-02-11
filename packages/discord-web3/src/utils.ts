@@ -30,7 +30,7 @@ import {
 } from "discord.js";
 import { keccak256, toBytes } from "viem";
 
-export type Payout ={
+export interface Payout {
   id:string;
   chainId?: number;
   csvData?: string;
@@ -49,12 +49,12 @@ export function getId(): string {
 }
 export function encodeKey(
   arr: (string | number)[],
-  delimiter: string = "!",
+  delimiter = "!",
 ): string {
   return arr.join(delimiter);
 }
 
-export function decodeKey(key: string, delimiter: string = "!"): string[] {
+export function decodeKey(key: string, delimiter = "!"): string[] {
   return key.split(delimiter);
 }
 export const Chains = [
@@ -98,12 +98,12 @@ export const Chains = [
   // { chainId: 84531, name: "Base Goerli Testnet", currency: "ETH" },
 ];
 
-export type ChainSummary = {
+export interface ChainSummary {
   name: string;
   currency: string;
   shortName: string;
   chainId: number;
-};
+}
 
 export function mapChainsById(): Record<number, ChainSummary> {
   return Chains.reduce(
@@ -117,13 +117,13 @@ export function mapChainsById(): Record<number, ChainSummary> {
 
 export const ChainsById = mapChainsById();
 
-export type RpcParams = {
+export interface RpcParams {
   id: string | undefined;
   ip: string | undefined;
   token: string | undefined;
   params: unknown;
   method: string;
-};
+}
 export type RpcFunction = (params: RpcParams) => Promise<unknown | void>;
 
 export function RpcFactory(
@@ -160,8 +160,8 @@ const serializeJSONObject = (json: any): string => {
     const keys = Object.keys(json).sort();
     acc += `{${JSON.stringify(keys, stringifyReplacer)}`;
 
-    for (let i = 0; i < keys.length; i++) {
-      acc += `${serializeJSONObject(json[keys[i]])},`;
+    for (const key of keys) {
+      acc += `${serializeJSONObject(json[key])},`;
     }
 
     return `${acc}}`;
@@ -200,7 +200,7 @@ export function calculateSafeChecksum(batchJson: any): string | undefined {
  * @returns The Safe transaction batch JSON object.
  */
 export function generateSafeTransactionBatch(params: {
-  entries: Array<[string, string]>;
+  entries: [string, string][];
   chainId: number;
   safeAddress: string;
   erc20Address: string;
@@ -328,7 +328,7 @@ export async function resolveDiscordUser(
   guildId: string,
 ): Promise<User | null> {
   // Try direct user ID (snowflake)
-  const idMatch = maybeId.match(/^\d{15,21}$/);
+  const idMatch = /^\d{15,21}$/.exec(maybeId);
   if (idMatch) {
     try {
       return await client.users.fetch(maybeId);
@@ -338,7 +338,7 @@ export async function resolveDiscordUser(
   }
 
   // Try username#discriminator
-  const tagMatch = maybeId.match(/^(.+)#(\d{4})$/);
+  const tagMatch = /^(.+)#(\d{4})$/.exec(maybeId);
   if (tagMatch) {
     const [_, username, discriminator] = tagMatch;
     try {
@@ -390,7 +390,7 @@ export async function resolveDiscordUser(
   return null;
 }
 
-type DiscordUser = {
+interface DiscordUser {
   user:{tag:string}
   id:string;
   displayName:string;
@@ -469,7 +469,7 @@ export function dispersePayout({
   donateAddress,
   dateStr,
 }: {
-  addressEntries: Array<[string, string]>,
+  addressEntries: [string, string][],
   chainId: number,
   donateAmount: number,
   errors?: string[],
@@ -484,7 +484,7 @@ export function dispersePayout({
     donateAddress.length > 0;
 
   if (hasDonation) {
-    entries.push([donateAddress!, donateAmount.toString()]);
+    entries.push([donateAddress, donateAmount.toString()]);
   }
 
   // CSV header
@@ -511,7 +511,7 @@ export function dispersePayout({
   const chainName = ChainsById[chainId]?.name ?? "Unknown Chain";
 
   // Calculate total amount
-  let totalAmount = entries.reduce(
+  const totalAmount = entries.reduce(
     (acc, [, amount]) => acc + parseFloat(amount),
     0,
   );
@@ -558,7 +558,7 @@ export async function parseRecipientsCsvAndResolveAddresses({
   guildId: string;
   userModel: { getAddress: (userId: string, guildId: string, chainId: number) => Promise<string | undefined> };
   chainId: number;
-}): Promise<{ addressEntries: Array<[string, string]>, errors: string[] }> {
+}): Promise<{ addressEntries: [string, string][], errors: string[] }> {
   // Parse CSV lines into [id, amount] pairs
   const lines = csvData
     .split("\n")
@@ -593,7 +593,7 @@ export async function parseRecipientsCsvAndResolveAddresses({
   }
 
   // 2. Lookup addresses for resolved users
-  const addressEntries: Array<[string, string]> = [];
+  const addressEntries: [string, string][] = [];
   for (const userId in userIdToAmount) {
     const user = userIdToUser[userId];
     const userDisplayName = user ? user.username : "Unknown";
@@ -718,7 +718,7 @@ export function renderSafePayoutSetupRow(payout :Payout) {
  * @param {Array} params.allSafes - Array of all safe address objects for this guild.
  * @returns {{ content: string, components: [ActionRowBuilder<ButtonBuilder>] }}
  */
-type Safe = {
+interface Safe {
   userId: string;
   chainId: number;
   address: string;

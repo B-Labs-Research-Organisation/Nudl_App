@@ -139,16 +139,14 @@ export class RedisStore<K, V> implements Store<K, V> {
   }
 }
 
-export type PartialToken = {};
-
-export type Token = {
+export interface Token {
   name: string;
   symbol: string;
   decimals: number;
   address: string;
   chainId: number;
   guildId: string;
-};
+}
 
 export function Tokens(store: Store<string, string>) {
   async function setToken(token: Token): Promise<void> {
