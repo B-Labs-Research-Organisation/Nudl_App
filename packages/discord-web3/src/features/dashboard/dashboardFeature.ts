@@ -14,7 +14,7 @@ import {
 } from "discord.js";
 import assert from "assert";
 
-import { Chains, ChainsById, renderUser } from "../../utils";
+import { Chains, ChainsById } from "../../utils";
 
 export type DashboardDeps = {
   userModel: {
@@ -22,12 +22,16 @@ export type DashboardDeps = {
       userId: string,
       guildId: string,
     ): Promise<{ chainId: number; address: string }[]>;
+    deleteAddress(userId: string, guildId: string, chainId: number): Promise<boolean>;
+  };
+  stores: {
+    payouts: Record<string, any>;
   };
 };
 
 export async function handleDashboardCommand(
   interaction: Interaction,
-  deps: DashboardDeps,
+  _deps: DashboardDeps,
 ): Promise<boolean> {
   if (!interaction.isChatInputCommand()) return false;
   if (interaction.commandName !== "nudl") return false;
@@ -108,6 +112,10 @@ export async function handleDashboardButton(
           .setCustomId("dash:user:add")
           .setLabel("Add / update address")
           .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:user:remove")
+          .setLabel("Remove address")
+          .setStyle(ButtonStyle.Danger),
       ),
     ];
 
@@ -134,16 +142,39 @@ export async function handleDashboardButton(
       return true;
     }
 
-    // We can’t easily build a GuildMember here without fetch; keep simple text list for now.
+    // nicer formatting
     const lines = addresses
       .map(({ chainId, address }) => {
         const chainName = ChainsById[chainId]?.name ?? String(chainId);
-        return `- **${chainName}** (${chainId}): \`${address}\``;
+        return `• **${chainName}** (${chainId}) — \`${address}\``;
       })
       .join("\n");
 
     await (interaction as ButtonInteraction).reply({
-      content: `**Your addresses**\n${lines}`,
+      content: `**Your addresses**\n\n${lines}`,
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  if (interaction.customId === "dash:user:remove") {
+    const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("dash:user:remove:network")
+        .setPlaceholder("Select a network to remove...")
+        .addOptions(
+          Chains.map((c) => ({
+            label: c.name,
+            value: String(c.chainId),
+            description: c.shortName ? `(${c.shortName})` : undefined,
+          })),
+        ),
+    );
+
+    await (interaction as ButtonInteraction).reply({
+      content: "Pick a network to remove:",
+      components: [networkRow],
       flags: MessageFlags.Ephemeral,
     });
 
@@ -168,6 +199,26 @@ export async function handleDashboardButton(
     await (interaction as ButtonInteraction).reply({
       content: "Pick a network to add/update:",
       components: [networkRow],
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  // confirm removal
+  if (interaction.customId.startsWith("dash:user:remove:confirm:")) {
+    const chainId = Number(interaction.customId.split(":")[3]);
+    assert(chainId, "Invalid chain");
+
+    const guildId = interaction.guildId!;
+    const userId = interaction.user.id;
+
+    await deps.userModel.deleteAddress(userId, guildId, chainId);
+
+    const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+    await (interaction as ButtonInteraction).reply({
+      content: `✅ Removed your address for **${chainName}** (${chainId}).`,
       flags: MessageFlags.Ephemeral,
     });
 
@@ -201,10 +252,9 @@ export async function handleDashboardButton(
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId("dash:admin:payout")
-          .setLabel("Payouts (next)")
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
+          .setCustomId("dash:admin:payout:start")
+          .setLabel("Start payout")
+          .setStyle(ButtonStyle.Success),
       ),
     ];
 
@@ -212,10 +262,49 @@ export async function handleDashboardButton(
       content:
         "**Admin dashboard**\n\n" +
         "- Manage tokens/safes via UI\n" +
-        "- Payout wizard coming next\n",
+        "- Start a payout via the wizard\n",
       components: rows,
     });
 
+    return true;
+  }
+
+  if (interaction.customId === "dash:admin:payout:start") {
+    if (
+      !interaction.memberPermissions?.has(
+        PermissionsBitField.Flags.Administrator,
+      )
+    ) {
+      await (interaction as ButtonInteraction).reply({
+        content: "Admin dashboard requires Administrator permission.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    // Create a payout session and reuse existing payoutModal_<id> handler
+    const payoutId = String(Date.now());
+    deps.stores.payouts[payoutId] = {
+      id: payoutId,
+      list: [],
+      csvData: "",
+    };
+
+    const modal = new ModalBuilder()
+      .setCustomId(`payoutModal_${payoutId}`)
+      .setTitle("Paste payout CSV");
+
+    const input = new TextInputBuilder()
+      .setCustomId(`csvInput`)
+      .setLabel("Paste CSV (discordid,amount per line)")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+    );
+
+    await (interaction as ButtonInteraction).showModal(modal);
     return true;
   }
 
@@ -224,6 +313,7 @@ export async function handleDashboardButton(
 
 export async function handleDashboardSelectMenu(
   interaction: Interaction,
+  deps: DashboardDeps,
 ): Promise<boolean> {
   if (!interaction.isStringSelectMenu()) return false;
 
@@ -249,6 +339,28 @@ export async function handleDashboardSelectMenu(
     );
 
     await (interaction as StringSelectMenuInteraction).showModal(modal);
+    return true;
+  }
+
+  if (interaction.customId === "dash:user:remove:network") {
+    const chainId = Number(interaction.values[0]);
+    assert(chainId, "Invalid chain");
+
+    const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`dash:user:remove:confirm:${chainId}`)
+        .setLabel(`Remove ${chainName}`)
+        .setStyle(ButtonStyle.Danger),
+    );
+
+    await (interaction as StringSelectMenuInteraction).reply({
+      content: `Confirm removal for **${chainName}** (${chainId})?`,
+      components: [row],
+      flags: MessageFlags.Ephemeral,
+    });
+
     return true;
   }
 

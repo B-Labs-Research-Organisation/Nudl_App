@@ -539,7 +539,7 @@ export async function main(): Promise<void> {
       const { commandName } = interaction;
 
       try {
-        if (await handleDashboardCommand(interaction, { userModel })) {
+        if (await handleDashboardCommand(interaction, { userModel, stores: { payouts } })) {
           return;
         }
         if (await handleDashboardAdminCommand(interaction)) {
@@ -1220,7 +1220,7 @@ export async function main(): Promise<void> {
         }
       }
     } else if (interaction.isButton()) {
-      if (await handleDashboardButton(interaction, { userModel })) {
+      if (await handleDashboardButton(interaction, { userModel, stores: { payouts } })) {
         return;
       }
       if (await handleTokensButton(interaction, { tokenModel })) {
@@ -1574,7 +1574,7 @@ export async function main(): Promise<void> {
       }
     }
     if (interaction.isStringSelectMenu()){
-      if (await handleDashboardSelectMenu(interaction)) {
+      if (await handleDashboardSelectMenu(interaction, { userModel, stores: { payouts } })) {
         return;
       }
       if (await handleTokensSelectMenu(interaction, { tokenModel })) {
