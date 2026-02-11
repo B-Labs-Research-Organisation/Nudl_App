@@ -305,35 +305,123 @@ export async function handleAddAddressButton(
   deps: AddressesFeatureDeps,
 ): Promise<boolean> {
   if (!interaction.isButton()) return false;
-  if (!interaction.customId.startsWith("addAddress_")) return false;
 
-  const network = parseInt(interaction.customId.split("_")[1], 10);
-  const chain = ChainsById[network];
-  const chainName = chain ? chain.name : "Unknown Chain";
-  const userId = interaction.user.id;
-  const guildId = interaction.guildId!;
+  // User-initiated address collection
+  if (interaction.customId.startsWith("addAddress_")) {
+    const network = parseInt(interaction.customId.split("_")[1], 10);
+    const chain = ChainsById[network];
+    const chainName = chain ? chain.name : "Unknown Chain";
+    const userId = interaction.user.id;
+    const guildId = interaction.guildId!;
 
-  const existingAddress = await deps.userModel.getAddress(userId, guildId, network);
-  if (existingAddress) {
-    await interaction.reply({
-      content: `You already have an address set for this network: ${existingAddress}`,
-      flags: MessageFlags.Ephemeral,
-    });
+    const existingAddress = await deps.userModel.getAddress(
+      userId,
+      guildId,
+      network,
+    );
+    if (existingAddress) {
+      await interaction.reply({
+        content: `You already have an address set for this network: ${existingAddress}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`addAddress_${network}`)
+      .setTitle(`Add Address for ${chainName} (${network})`);
+
+    const input = new TextInputBuilder()
+      .setCustomId("addressInput")
+      .setLabel("Enter your address")
+      .setStyle(TextInputStyle.Short);
+
+    const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(
+      input,
+    );
+    modal.addComponents(actionRow);
+
+    await (interaction as ButtonInteraction).showModal(modal);
     return true;
   }
 
-  const modal = new ModalBuilder()
-    .setCustomId(`addAddress_${network}`)
-    .setTitle(`Add Address for ${chainName} (${network})`);
+  // Admin announcement to missing users
+  if (interaction.customId.startsWith("notifyMissing_")) {
+    const [_, networkPart, rolePart, channelPart] =
+      interaction.customId.split("_");
+    const network = Number(networkPart.split("chain:")[1]);
+    const roleId = rolePart !== "role:none" ? rolePart.split("role:")[1] : null;
+    const channelId =
+      channelPart !== "channel:none" ? channelPart.split("channel:")[1] : null;
 
-  const input = new TextInputBuilder()
-    .setCustomId("addressInput")
-    .setLabel("Enter your address")
-    .setStyle(TextInputStyle.Short);
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: "This command can only be used within a guild.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
 
-  const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-  modal.addComponents(actionRow);
+    const guildId = guild.id;
+    const allDiscordUsers = await guild.members.fetch();
+    const allAddresses = await deps.userModel.getUsersByChain(network, guildId);
 
-  await (interaction as ButtonInteraction).showModal(modal);
-  return true;
+    const usersWithAddresses = new Set(allAddresses.map((addr) => addr.userId));
+    let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
+      (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
+    );
+
+    if (roleId) {
+      await guild.roles.fetch();
+      const roleMembers = guild.roles.cache.get(roleId)?.members;
+      if (roleMembers && roleMembers.size > 0) {
+        const roleMemberIds = new Set(roleMembers.map((m) => m.id));
+        usersWithoutAddresses = usersWithoutAddresses.filter((u) =>
+          roleMemberIds.has(u.id),
+        );
+      } else {
+        usersWithoutAddresses = [];
+      }
+    }
+
+    if (channelId) {
+      const channel = await guild.channels.fetch(channelId);
+      assert(channel !== null && channel.isTextBased(), "Must be a text channel");
+      const channelMembers = (channel as TextChannel).members;
+      usersWithoutAddresses = usersWithoutAddresses.filter((u) =>
+        channelMembers.has(u.id),
+      );
+    }
+
+    if (usersWithoutAddresses.length === 0) {
+      await interaction.reply({
+        content: `All users have addresses set for ${ChainsById[network].name} (${network}).`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const mentions = usersWithoutAddresses.map((u) => `<@${u.id}>`).join(" ");
+    const chainName = ChainsById[network]?.name || "Unknown Chain";
+
+    const button = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`addAddress_${network}`)
+        .setLabel(`📥 Add ${chainName} (${network}) address`)
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    await interaction.reply({
+      content: `🚨 __**Attention Required**__ 🚨\n\n${mentions}\n\n💸 *We need your wallet address!* 👛\n\n⚠️ Don’t miss out — get set up ASAP!\nNeed help? Just drop a message! 🆘`,
+      components: [button],
+      allowedMentions: {
+        users: usersWithoutAddresses.map((u) => u.id),
+      },
+    });
+
+    return true;
+  }
+
+  return false;
 }
