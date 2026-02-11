@@ -1573,26 +1573,41 @@ export async function main(): Promise<void> {
         return;
       }
     }
-    if (interaction.isStringSelectMenu()){
-      if (await handleDashboardSelectMenu(interaction, { userModel, tokenModel, safeModel, stores: { payouts } })) {
-        return;
-      }
-      if (await handleTokensSelectMenu(interaction, { tokenModel })) {
-        return;
-      }
-      if (await handleSafesSelectMenu(interaction, { safeModel })) {
-        return;
-      }
+    if (
+      interaction.isStringSelectMenu() ||
+      interaction.isRoleSelectMenu() ||
+      interaction.isChannelSelectMenu()
+    ) {
       if (
-        await handlePayoutsSelectMenu(interaction, {
-          client,
+        await handleDashboardSelectMenu(interaction, {
           userModel,
           tokenModel,
           safeModel,
-          stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+          stores: { payouts },
         })
       ) {
         return;
+      }
+
+      // Only string select menus apply to the existing feature handlers below.
+      if (interaction.isStringSelectMenu()) {
+        if (await handleTokensSelectMenu(interaction, { tokenModel })) {
+          return;
+        }
+        if (await handleSafesSelectMenu(interaction, { safeModel })) {
+          return;
+        }
+        if (
+          await handlePayoutsSelectMenu(interaction, {
+            client,
+            userModel,
+            tokenModel,
+            safeModel,
+            stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+          })
+        ) {
+          return;
+        }
       }
     }
   });
