@@ -66,6 +66,13 @@ import assert from "assert";
 import ERC20_ABI from "./erc20.abi";
 import _, { chain } from "lodash";
 import { createBot, start } from "./bot";
+import {
+  handleTokenAutocomplete,
+  handleTokensButton,
+  handleTokensCommand,
+  handleTokensModalSubmit,
+  handleTokensSelectMenu,
+} from "./features/tokens/tokensFeature";
 
 
 const fakeEthAddresses = [
@@ -604,31 +611,8 @@ export async function main(): Promise<void> {
             });
           }
         } else if (commandName === "admin_manage_tokens") {
-            if (
-              !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
-              )
-            ) {
-              await interaction.reply({
-                content: "You do not have permission to use this command.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const guild = interaction.guild;
-            if (!guild) {
-              await interaction.reply({
-                content: "This command can only be used within a guild.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const allTokens = await tokenModel.getTokensByGuild(guild.id)
-            const reply = getAdminManageTokensDisplay({allTokens})
-            await interaction.reply({
-              ...reply,
-              flags: MessageFlags.Ephemeral,
-            });
+          const handled = await handleTokensCommand(interaction, { tokenModel });
+          if (handled) return;
         } else if (commandName === "admin_manage_safes") {
           if (interaction.isChatInputCommand()) {
             if (
@@ -1742,86 +1726,12 @@ export async function main(): Promise<void> {
           console.error(err, "Error autocomplete safe address");
         }
       } else if (focusedOption.name === "token_address") {
-        const guildId = interaction.guildId!;
-
-        const userInput =
-          interaction.options.getString("token_address", false) || "";
-        const [inputNetwork, inputAddress] = userInput.split(":");
-
-        const tokens = await tokenModel.getTokensByGuild(guildId);
-        console.log("guild tokens", tokens, inputNetwork, inputAddress);
-
-        const filteredTokens = tokens.filter(({ address, chainId }) => {
-          const matchesNetwork = inputNetwork ? chainId !== undefined : true;
-
-          const matchesAddress = inputAddress
-            ? address.toLowerCase().startsWith(inputAddress.toLowerCase())
-            : true;
-
-          return matchesNetwork && matchesAddress;
-        });
-
-        const choices = filteredTokens.map(({ address, symbol, chainId }) => {
-          const chain = ChainsById[chainId];
-          const chainName = chain ? chain.name : "Unknown Chain";
-          return {
-            name: `${chainName}:${symbol}:${address}`,
-            value: `${chain ? chain.shortName : "unknown"}:${address}`,
-          };
-        });
-
-        try {
-          await interaction.respond(choices);
-        } catch (err) {
-          console.error(err, "Error autocomplete token address");
-        }
+        const handled = await handleTokenAutocomplete(interaction, { tokenModel });
+        if (handled) return;
       }
     } else if (interaction.isModalSubmit()) {
       try {
-        if(interaction.customId.startsWith("manageTokens_add")) {
-          // CustomId format: "manageTokens_add_<chainId>"
-          const parts = interaction.customId.split("_");
-          const chainId = parts.length > 2 ? parts[2] : undefined;
-          assert(chainId, 'Chain not found');
-          
-          // Check that chainId is valid
-          const chain = ChainsById[Number(chainId)];
-          assert(chain, `Network not found for chainId: ${chainId}`);
-
-          // Get token address from modal input
-          const tokenAddress = interaction.fields.getTextInputValue("tokenAddress");
-          assert(tokenAddress, "Token address is required");
-
-          // Add token for the guild in the db
-          const guildId = interaction.guildId;
-          assert(guildId, "Guild not found");
-          const viemChain = getViemChain(chain.chainId);
-          const tokenInfo = await fetchErc20TokenInfo({chainId:chain.chainId,tokenAddress,guildId})
-
-          // Save the token (simulate as Models.Token: {address,chainId})
-          await tokenModel.setToken(tokenInfo);
-
-          // Compose a row with a "Manage More Tokens" button
-          const manageMoreRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId("manageTokens")
-              .setLabel("Manage More Tokens")
-              .setStyle(ButtonStyle.Primary)
-          );
-
-          // Optionally show success message or refresh display
-          await interaction.reply({
-            content: [
-              `✅ Token added to **${chain.name}**!`,
-              "",
-              `**Name:** ${tokenInfo.name}`,
-              `**Symbol:** ${tokenInfo.symbol}`,
-              `**Decimals:** ${tokenInfo.decimals}`,
-              `**Address:** \`${tokenInfo.address}\``
-            ].join("\n"),
-            flags: MessageFlags.Ephemeral,
-            components: [manageMoreRow],
-          });
+        if (await handleTokensModalSubmit(interaction, { tokenModel })) {
           return;
         }
         if(interaction.customId.startsWith("manageSafe_addressModal")){
@@ -2272,84 +2182,9 @@ export async function main(): Promise<void> {
         }
       }
     } else if (interaction.isButton()) {
-      if(interaction.customId.startsWith("manageTokens")){
-        const guild = interaction.guild;
-        if (!guild) {
-          await interaction.reply({
-            content: "This command can only be used within a guild.",
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const allTokens = await tokenModel.getTokensByGuild(guild.id)
-        if (interaction.customId.startsWith("manageTokens_add")) {
-          // CustomId format: "manageTokens_add_<chainId>" or just "manageTokens_add"
-          const parts = interaction.customId.split("_");
-          const chainId = parts.length > 2 ? parts[2] : undefined; // The 3rd part is chainId if present
-          assert(chainId,'Chain not found')
-
-          // Show modal asking for the token address
-          const modal = new ModalBuilder()
-            .setCustomId(`manageTokens_add_${chainId}`)
-            .setTitle(`Add Token Address${chainId ? ` (Chain ID: ${chainId})` : ''}`);
-
-          const addressInput = new TextInputBuilder()
-            .setCustomId("tokenAddress")
-            .setLabel("Token Address")
-            .setPlaceholder("0x...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput)
-          );
-
-          await interaction.showModal(modal);
-          return;
-        }
-        // user selected network + remove token button
-        if(interaction.customId.startsWith("manageTokens_remove")){
-          const parts = interaction.customId.split("_");
-          const chainId = parts.length > 2 ? parts[2] : undefined; // The 3rd part is chainId if present
-          assert(chainId,'No chain selected');
-          const reply = tokenRemovalSelectionDisplay({
-            chainId:Number(chainId),
-            allTokens,
-          })
-          await interaction.update(reply)
-          return;
-        }
-        if(interaction.customId.startsWith("manageTokens_confirmRemove_")){
-          // CustomId format: "manageTokens_confirmRemove_<chainId>_<tokenAddress>"
-          const customIdParts = interaction.customId.split("_");
-          const chainId = customIdParts[2];
-          const tokenAddress = customIdParts[3];
-          console.log({chainId,tokenAddress})
-          assert(chainId, 'No chain selected');
-          assert(tokenAddress, 'No token selected');
-          await tokenModel.deleteToken(guild.id, Number(chainId), tokenAddress);
-
-          // Compose a row with a "Manage More Tokens" button
-          const manageMoreRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId("manageTokens")
-              .setLabel("Manage More Tokens")
-              .setStyle(ButtonStyle.Primary)
-          );
-
-          // Fetch the chain name for friendlier message
-          const chainName = ChainsById[Number(chainId)]?.name ?? `Chain ID ${chainId}`;
-
-          await interaction.update({
-            content: `✅ Token has been deleted from **${chainName}**.`,
-            components: [manageMoreRow],
-          });
-          return;
-        }
-        const reply = getAdminManageTokensDisplay({allTokens})
-        await interaction.update(reply)
+      if (await handleTokensButton(interaction, { tokenModel })) {
         return;
-      }else if(interaction.customId.startsWith("cancelSetSafe")){
+      } else if(interaction.customId.startsWith("cancelSetSafe")){
         const guildId = interaction.guildId!;
         assert(guildId,"Guild not found")
         const allSafes = await safeModel.getAllAddresses(guildId);
@@ -2864,70 +2699,7 @@ export async function main(): Promise<void> {
       }
     }
     if(interaction.isStringSelectMenu()){
-      if(interaction.customId.startsWith('manageTokens_removeSelect_')){
-        // Get the chainId from the customId: "manageTokens_removeSelect_<chainId>"
-        const chainIdStr = interaction.customId.replace('manageTokens_removeSelect_', '');
-        const chainId = parseInt(chainIdStr, 10);
-
-        // Retrieve the selected token address from the select menu values
-        const selectedTokenAddress = interaction.values ? interaction.values[0] : undefined;
-        assert(selectedTokenAddress, "No token selected to remove.");
-        assert(chainId, "Invalid customId format: missing chainId.");
-
-        // Optionally fetch token info for a friendlier prompt (e.g., symbol, name)
-        // We'll try to get the token itself (if stored in db)
-        const guild = interaction.guild;
-        let tokenLabel = selectedTokenAddress;
-        if (guild) {
-          const allTokens = await tokenModel.getTokensByGuild(guild.id);
-          const match = allTokens.find(
-            t => t.address.toLowerCase() === selectedTokenAddress.toLowerCase()
-              && t.chainId === chainId
-          );
-          if (match) {
-            tokenLabel = match.symbol
-              ? `${match.symbol} (${selectedTokenAddress.slice(0, 6)}...${selectedTokenAddress.slice(-4)})`
-              : `${selectedTokenAddress.slice(0, 6)}...${selectedTokenAddress.slice(-4)}`;
-          } else {
-            tokenLabel = `${selectedTokenAddress.slice(0, 6)}...${selectedTokenAddress.slice(-4)}`;
-          }
-        }
-
-        const chainName = ChainsById[chainId]?.name ?? chainId;
-
-        // Compose remove/cancel confirm row
-        const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`manageTokens_confirmRemove_${chainId}_${selectedTokenAddress}`)
-            .setLabel("Yes, Remove")
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId("manageTokens")
-            .setLabel("Cancel")
-            .setStyle(ButtonStyle.Secondary)
-        );
-        await interaction.update({
-          content: `⚠️ Are you sure you want to remove the token **${tokenLabel}** from **${chainName}**?`,
-          components: [confirmRow],
-        });
-        return;
-      }
-      if(interaction.customId.startsWith('manageTokens_networkSelect')){
-        const guild = interaction.guild;
-        if (!guild) {
-          await interaction.reply({
-            content: "This command can only be used within a guild.",
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const allTokens = await tokenModel.getTokensByGuild(guild.id);
-        const selectedNetwork = interaction.values ? interaction.values[0] : undefined; // Should be chainId string ("1", "137", ...), or "all"
-        const reply = getAdminManageTokensDisplay({
-          allTokens,
-          selectedNetwork,
-        });
-        await interaction.update(reply);
+      if (await handleTokensSelectMenu(interaction, { tokenModel })) {
         return;
       }
       if(interaction.customId.startsWith('manageSafe_removeSelect')){
