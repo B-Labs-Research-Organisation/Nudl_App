@@ -696,14 +696,81 @@ export async function handleDashboardSelectMenu(
     const payout = deps.stores.payouts[payoutId];
     assert(payout, "Payout session not found");
 
+    const guild = interaction.guild;
+    assert(guild, "This command can only be used within a guild.");
+
     payout.roleId = (interaction as any).values?.[0];
+
+    await guild.roles.fetch();
+    const role = guild.roles.cache.get(payout.roleId);
+    assert(role, "Role not found");
+
+    let members = Array.from(role.members.values()).filter((m) => !m.user.bot);
+
+    // If role+channel mode and channel already selected, intersect.
+    if (payout.recipientsMode === "role-channel" && payout.channelId) {
+      const ch = await guild.channels.fetch(payout.channelId);
+      assert(ch && ch.isTextBased(), "Must be a text channel");
+      const channelMembers = Array.from((ch as TextChannel).members.values()).filter(
+        (m) => !m.user.bot,
+      );
+      const channelSet = new Set(channelMembers.map((m) => m.id));
+      members = members.filter((m) => channelSet.has(m.id));
+    }
+
+    const count = members.length;
+    const preview = members
+      .slice(0, 10)
+      .map((m) => `<@${m.id}>`)
+      .join(" ");
+
+    const rows: any[] = [];
+
+    if (payout.recipientsMode === "role" || payout.recipientsMode === "role-channel") {
+      rows.push(
+        new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+          new RoleSelectMenuBuilder()
+            .setCustomId(`dash:admin:payout:role:${payoutId}`)
+            .setPlaceholder("Select a role…")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+    }
+
+    if (payout.recipientsMode === "channel" || payout.recipientsMode === "role-channel") {
+      rows.push(
+        new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+          new ChannelSelectMenuBuilder()
+            .setCustomId(`dash:admin:payout:channel:${payoutId}`)
+            .setPlaceholder("Select a channel…")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+    }
+
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:prefill:${payoutId}`)
+          .setLabel("Prefill CSV (userId,0) + open modal")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(count === 0),
+        new ButtonBuilder()
+          .setCustomId("dash:admin")
+          .setLabel("Cancel / Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
 
     await (interaction as any).update({
       content:
-        `Role selected (<@&${payout.roleId}>).\n` +
-        `Now click **Prefill CSV** to open the amounts modal.`,
-      // keep existing components
-      components: (interaction as any).message?.components ?? [],
+        `Role selected: <@&${payout.roleId}>\n` +
+        `Matching users: **${count}**` +
+        (count ? `\nPreview: ${preview}` : "\n_No users found for that filter._"),
+      components: rows,
+      allowedMentions: { users: members.slice(0, 10).map((m) => m.id), roles: [] },
     });
 
     return true;
@@ -714,13 +781,78 @@ export async function handleDashboardSelectMenu(
     const payout = deps.stores.payouts[payoutId];
     assert(payout, "Payout session not found");
 
+    const guild = interaction.guild;
+    assert(guild, "This command can only be used within a guild.");
+
     payout.channelId = (interaction as any).values?.[0];
+
+    const ch = await guild.channels.fetch(payout.channelId);
+    assert(ch && ch.isTextBased(), "Must be a text channel");
+
+    let members = Array.from((ch as TextChannel).members.values()).filter((m) => !m.user.bot);
+
+    // If role+channel mode and role already selected, intersect.
+    if (payout.recipientsMode === "role-channel" && payout.roleId) {
+      await guild.roles.fetch();
+      const role = guild.roles.cache.get(payout.roleId);
+      assert(role, "Role not found");
+      const roleSet = new Set(Array.from(role.members.keys()));
+      members = members.filter((m) => roleSet.has(m.id));
+    }
+
+    const count = members.length;
+    const preview = members
+      .slice(0, 10)
+      .map((m) => `<@${m.id}>`)
+      .join(" ");
+
+    const rows: any[] = [];
+
+    if (payout.recipientsMode === "role" || payout.recipientsMode === "role-channel") {
+      rows.push(
+        new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+          new RoleSelectMenuBuilder()
+            .setCustomId(`dash:admin:payout:role:${payoutId}`)
+            .setPlaceholder("Select a role…")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+    }
+
+    if (payout.recipientsMode === "channel" || payout.recipientsMode === "role-channel") {
+      rows.push(
+        new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+          new ChannelSelectMenuBuilder()
+            .setCustomId(`dash:admin:payout:channel:${payoutId}`)
+            .setPlaceholder("Select a channel…")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+    }
+
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:prefill:${payoutId}`)
+          .setLabel("Prefill CSV (userId,0) + open modal")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(count === 0),
+        new ButtonBuilder()
+          .setCustomId("dash:admin")
+          .setLabel("Cancel / Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
 
     await (interaction as any).update({
       content:
-        `Channel selected (<#${payout.channelId}>).\n` +
-        `Now click **Prefill CSV** to open the amounts modal.`,
-      components: (interaction as any).message?.components ?? [],
+        `Channel selected: <#${payout.channelId}>\n` +
+        `Matching users: **${count}**` +
+        (count ? `\nPreview: ${preview}` : "\n_No users found for that filter._"),
+      components: rows,
+      allowedMentions: { users: members.slice(0, 10).map((m) => m.id), roles: [] },
     });
 
     return true;
