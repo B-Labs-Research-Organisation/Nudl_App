@@ -20,11 +20,13 @@ import {
   ChainsById,
   dispersePayout,
   generateSafeTransactionBatch,
+  getViemChain,
   parseRecipientsCsvAndResolveAddresses,
   renderPayoutPrefill,
   renderSafePayoutSetupRow,
   resolveDiscordUser,
 } from "../../utils";
+import ERC20_ABI from "../../erc20.abi";
 
 export type PayoutsFeatureDeps = {
   client: any;
@@ -48,6 +50,7 @@ export type PayoutsFeatureDeps = {
       address: string,
     ): Promise<any | undefined>;
     getTokensByGuild(guildId: string): Promise<any[]>;
+    setToken(tokenInfo: any): Promise<void>;
   };
   safeModel?: {
     getAllAddresses(guildId: string): Promise<any[]>;
@@ -56,6 +59,12 @@ export type PayoutsFeatureDeps = {
       guildId: string,
       chainId: number,
     ): Promise<string | undefined>;
+    setAddress(
+      userId: string,
+      guildId: string,
+      chainId: number,
+      address: string,
+    ): Promise<void>;
   };
   stores: {
     payouts: Record<string, any>;
@@ -336,6 +345,183 @@ export async function handlePayoutsModalSubmit(
     await interaction.editReply({
       content: description,
       files: [file],
+    });
+
+    return true;
+  }
+
+  // Payout-setup modals (Safe + Token) launched from payout select menus
+  if (interaction.customId.startsWith("addSafeModal_")) {
+    assert(deps.safeModel, "safeModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const foundChain = Chains.find((chain) => chain.chainId === payout.chainId);
+    assert(foundChain, "Chain not found");
+
+    const safeAddress = interaction.fields.getTextInputValue("safeAddress");
+    const [networkPrefix, address] = safeAddress.split(":");
+
+    if (networkPrefix && address) {
+      const addrChain = Chains.find(
+        (chain) => chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
+      );
+      if (addrChain?.chainId !== foundChain.chainId) {
+        await interaction.reply({
+          content: `Safe network (${addrChain?.name}) does not match selected network (${foundChain.name})`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return true;
+      }
+    }
+
+    const guildId = interaction.guildId!;
+    const actualAddress = address ?? safeAddress;
+
+    await deps.safeModel.setAddress(
+      guildId,
+      guildId,
+      foundChain.chainId,
+      actualAddress,
+    );
+
+    payout.safeAddress = actualAddress;
+
+    const renderSetup = renderSafePayoutSetupRow(payout);
+    await (interaction as any).update({
+      embeds: [
+        {
+          title: `✅ Safe Added for ${foundChain.name}`,
+          color: 0x2ecc71,
+          description: `**Safe Address:**\n\`${actualAddress}\``,
+          fields: [
+            {
+              name: "Chain",
+              value: `${foundChain.name} (${foundChain.chainId})`,
+              inline: true,
+            },
+          ],
+          footer: {
+            text: "Safe information saved successfully.",
+          },
+        },
+      ],
+      ...renderSetup,
+    });
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("addTokenModal_")) {
+    assert(deps.tokenModel, "tokenModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const foundChain = Chains.find((chain) => chain.chainId === payout.chainId);
+    assert(foundChain, "Chain not found");
+
+    const tokenAddress = interaction.fields.getTextInputValue("tokenAddress");
+    const guildId = interaction.guildId!;
+
+    // Use existing helper to fetch name/symbol/decimals and normalize address
+    // (fetchErc20TokenInfo is used elsewhere for token mgmt; keep it consistent)
+    // We’ll just do a minimal viem contract read here if needed later.
+
+    // Reuse on-chain reads already used in main.ts in earlier logic:
+    // Store token with normalized checksum address
+    const checksum = viem.getAddress(tokenAddress);
+
+    // Best-effort metadata fetch (some tokens can revert name/symbol)
+    let name = "";
+    let symbol = "";
+    let decimals = 18;
+    try {
+      const viemChain = getViemChain(foundChain.chainId);
+      assert(viemChain, `Chain ${foundChain.chainId} not found`);
+
+      const erc20 = viem.getContract({
+        address: checksum,
+        abi: ERC20_ABI as any,
+        client: viem.createPublicClient({
+          chain: viemChain,
+          transport: viem.http(),
+        }),
+      });
+      const results = await Promise.all([
+        erc20.read.name().catch(() => ""),
+        erc20.read.symbol().catch(() => ""),
+        erc20.read.decimals().catch(() => 18),
+      ]);
+      name = results[0] as string;
+      symbol = results[1] as string;
+      decimals = Number(results[2]);
+    } catch {
+      // ok
+    }
+
+    const tokenInfo = {
+      guildId,
+      chainId: foundChain.chainId,
+      name,
+      symbol,
+      decimals,
+      address: checksum,
+    };
+
+    await deps.tokenModel.setToken(tokenInfo as any);
+
+    // ensure payout state picks up decimals
+    payout.tokenAddress = checksum;
+    payout.decimals = decimals;
+
+    const renderSetup = renderSafePayoutSetupRow(payout);
+    await (interaction as any).update({
+      embeds: [
+        {
+          title: `✅ Token Added for ${foundChain.name}`,
+          color: 0x2ecc71,
+          description: `**Token Address:**\n\`${checksum}\``,
+          fields: [
+            {
+              name: "Chain",
+              value: `${foundChain.name} (${foundChain.chainId})`,
+              inline: true,
+            },
+            ...(name
+              ? [{ name: "Name", value: `${name}`, inline: true }]
+              : []),
+            ...(symbol
+              ? [{ name: "Symbol", value: `${symbol}`, inline: true }]
+              : []),
+            {
+              name: "Decimals",
+              value: `${decimals}`,
+              inline: true,
+            },
+          ],
+          footer: {
+            text: "Token information saved successfully.",
+          },
+        },
+      ],
+      ...renderSetup,
+      flags: MessageFlags.Ephemeral,
     });
 
     return true;
