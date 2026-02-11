@@ -2440,47 +2440,9 @@ export async function main(): Promise<void> {
             },
           });
         }
-      } else if (interaction.customId.startsWith("safePayoutModal_")) {
-        // interaction.deferReply({ephemeral:true});
-        const [_, safeId] = interaction.customId.split("_");
-
-        const modal = new ModalBuilder()
-          .setCustomId(`safePayoutModal_${safeId}`)
-          .setTitle("Paste Safe Payout CSV");
-
-        const input = new TextInputBuilder()
-          .setCustomId("csvInput")
-          .setLabel("Paste CSV (discordid,amount per line)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true);
-
-        const actionRow =
-          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-        modal.addComponents(actionRow);
-
-        await interaction.showModal(modal);
-      } else if (interaction.customId.startsWith("dispersePayoutModal_")) {
-        const [_, disperseId, chainIdStr] = interaction.customId.split("_");
-        const chainId = parseInt(chainIdStr, 10);
-
-        const modal = new ModalBuilder()
-          .setCustomId(`dispersePayoutModal_${disperseId}_${chainId}`)
-          .setTitle("Paste Disperse Payout CSV");
-
-        const input = new TextInputBuilder()
-          .setCustomId("csvInput")
-          .setLabel("Paste CSV (discordid,amount per line)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true);
-
-        const actionRow =
-          new ActionRowBuilder<TextInputBuilder>().addComponents(input);
-        modal.addComponents(actionRow);
-
-        await interaction.showModal(modal);
       }
     }
-    if(interaction.isStringSelectMenu()){
+    if (interaction.isStringSelectMenu()){
       if (await handleTokensSelectMenu(interaction, { tokenModel })) {
         return;
       }
