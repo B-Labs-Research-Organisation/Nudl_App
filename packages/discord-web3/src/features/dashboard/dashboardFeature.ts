@@ -14,7 +14,7 @@ import {
 } from "discord.js";
 import assert from "assert";
 
-import { Chains, ChainsById } from "../../utils";
+import { Chains, ChainsById, getAdminManageSafesDisplay, getAdminManageTokensDisplay } from "../../utils";
 
 export type DashboardDeps = {
   userModel: {
@@ -22,7 +22,17 @@ export type DashboardDeps = {
       userId: string,
       guildId: string,
     ): Promise<{ chainId: number; address: string }[]>;
-    deleteAddress(userId: string, guildId: string, chainId: number): Promise<boolean>;
+    deleteAddress(
+      userId: string,
+      guildId: string,
+      chainId: number,
+    ): Promise<boolean>;
+  };
+  tokenModel: {
+    getTokensByGuild(guildId: string): Promise<any[]>;
+  };
+  safeModel: {
+    getAllAddresses(guildId: string): Promise<any[]>;
   };
   stores: {
     payouts: Record<string, any>;
@@ -238,15 +248,14 @@ export async function handleDashboardButton(
       return true;
     }
 
-    // Use existing feature customIds so the current handlers work.
     const rows = [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId("manageTokens")
+          .setCustomId("dash:admin:tokens")
           .setLabel("Manage tokens")
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId("manageSafe")
+          .setCustomId("dash:admin:safes")
           .setLabel("Manage safes")
           .setStyle(ButtonStyle.Primary),
       ),
@@ -259,11 +268,52 @@ export async function handleDashboardButton(
     ];
 
     await (interaction as ButtonInteraction).update({
-      content:
-        "**Admin dashboard**\n\n" +
-        "- Manage tokens/safes via UI\n" +
-        "- Start a payout via the wizard\n",
+      content: "**Admin dashboard**\n\nChoose a category:",
       components: rows,
+    });
+
+    return true;
+  }
+
+  if (interaction.customId === "dash:admin:tokens") {
+    const guild = interaction.guild;
+    assert(guild, "This command can only be used within a guild.");
+
+    const allTokens = await deps.tokenModel.getTokensByGuild(guild.id);
+    const view = getAdminManageTokensDisplay({ allTokens });
+
+    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:admin")
+        .setLabel("← Back to Backoffice")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await (interaction as ButtonInteraction).update({
+      ...view,
+      components: [...(view.components ?? []), backRow],
+    });
+
+    return true;
+  }
+
+  if (interaction.customId === "dash:admin:safes") {
+    const guild = interaction.guild;
+    assert(guild, "This command can only be used within a guild.");
+
+    const allSafes = await deps.safeModel.getAllAddresses(guild.id);
+    const view = getAdminManageSafesDisplay({ allSafes });
+
+    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:admin")
+        .setLabel("← Back to Backoffice")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await (interaction as ButtonInteraction).update({
+      ...view,
+      components: [...(view.components ?? []), backRow],
     });
 
     return true;
