@@ -73,6 +73,12 @@ import {
   handleTokensModalSubmit,
   handleTokensSelectMenu,
 } from "./features/tokens/tokensFeature";
+import {
+  handleSafesButton,
+  handleSafesCommand,
+  handleSafesModalSubmit,
+  handleSafesSelectMenu,
+} from "./features/safes/safesFeature";
 
 
 const fakeEthAddresses = [
@@ -614,37 +620,8 @@ export async function main(): Promise<void> {
           const handled = await handleTokensCommand(interaction, { tokenModel });
           if (handled) return;
         } else if (commandName === "admin_manage_safes") {
-          if (interaction.isChatInputCommand()) {
-            if (
-              !interaction.memberPermissions?.has(
-                PermissionsBitField.Flags.Administrator,
-              )
-            ) {
-              await interaction.reply({
-                content: "You do not have permission to use this command.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-
-            const guild = interaction.guild;
-            if (!guild) {
-              await interaction.reply({
-                content: "This command can only be used within a guild.",
-                flags: MessageFlags.Ephemeral,
-              });
-              return;
-            }
-            const guildId = guild.id;
-            // Fetch all safes for this guild
-            const allSafes = await safeModel.getAllAddresses(guildId);
-            const reply = getAdminManageSafesDisplay({allSafes})
-
-            await interaction.reply({
-              ...reply,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
+          const handled = await handleSafesCommand(interaction, { safeModel });
+          if (handled) return;
         } else if (commandName === "admin_list_missing_addresses") {
           if (interaction.isChatInputCommand()) {
             if (
@@ -1734,67 +1711,10 @@ export async function main(): Promise<void> {
         if (await handleTokensModalSubmit(interaction, { tokenModel })) {
           return;
         }
-        if(interaction.customId.startsWith("manageSafe_addressModal")){
-          const safeAddress = interaction.fields.getTextInputValue('safeAddress')
-          const [networkPrefix, address] = safeAddress.split(":");
-          assert(networkPrefix,'Safe address requires network prefix')
-          const addrChain = Chains.find(
-            (chain) =>
-              chain.shortName.toLowerCase() === networkPrefix.toLowerCase(),
-          );
-          assert(addrChain,`Network not found with prefix ${networkPrefix}. Supply Safe address in the form of chain:address.`)
-          assert(address,'Safe address requires address. Supply Safe address in the form of chain:address.')
-          const guildId = interaction.guildId!;
-          assert(guildId,"Guild not found")
-
-          // Check if an address already exists for this guild & chain
-          const existingSafeAddress = await safeModel.getAddress(guildId, guildId, addrChain.chainId);
-          if(existingSafeAddress === address){
-            const allSafes = await safeModel.getAllAddresses(guildId);
-            const reply = getAdminManageSafesDisplay({allSafes})
-            reply.content = `Safe address is already set to ${address} on ${addrChain.name}!\n\n` + reply.content
-            await (interaction as any).update({
-              ...reply,
-            });
-            return;
-          }
-
-
-          // Prepare the confirmation buttons
-          const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`confirmSetSafe_${addrChain.chainId}_${address}`)
-              .setLabel(existingSafeAddress
-                ? `Override existing Safe address`
-                : `Set as Safe address`)
-              .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-              .setCustomId(`cancelSetSafe`)
-              .setLabel(`Cancel`)
-              .setStyle(ButtonStyle.Secondary)
-          );
-
-          let content;
-          if (existingSafeAddress) {
-            content = `A Safe address is already set for **${addrChain.name}**:\n\`${existingSafeAddress}\`\n\nDo you want to override it with:\n\`${address}\` ?`;
-          } else {
-            content = `You are about to set the following Safe address for **${addrChain.name}**:\n\`${address}\`\n\nDo you want to proceed?`;
-          }
-
-          await (interaction as any).update({
-            content,
-            components: [confirmRow],
-            flags: MessageFlags.Ephemeral,
-          });
+        if (await handleSafesModalSubmit(interaction, { safeModel })) {
           return;
-
-          // const allSafes = await safeModel.getAllAddresses(guildId);
-          // const reply = getAdminManageSafesDisplay({allSafes})
-          // await (interaction as any).update({
-          //   ...reply,
-          // });
-
-        } else if(interaction.customId.startsWith("addSafeModal_")){
+        }
+        if(interaction.customId.startsWith("addSafeModal_")){
           const [_, payoutId] = interaction.customId.split("_");
           const payout = payouts[payoutId];
           if (!payout) {
@@ -2184,38 +2104,11 @@ export async function main(): Promise<void> {
     } else if (interaction.isButton()) {
       if (await handleTokensButton(interaction, { tokenModel })) {
         return;
-      } else if(interaction.customId.startsWith("cancelSetSafe")){
-        const guildId = interaction.guildId!;
-        assert(guildId,"Guild not found")
-        const allSafes = await safeModel.getAllAddresses(guildId);
-        const reply = getAdminManageSafesDisplay({allSafes})
-        await (interaction as any).update({
-          ...reply,
-        });
-      } else if(interaction.customId.startsWith("confirmSetSafe")){
-          const guildId = interaction.guildId!;
-          assert(guildId,"Guild not found")
-
-        const customIdParts = interaction.customId.split("_");
-        // customIdParts[1] = chainId, customIdParts[2] = address (may contain underscores/colons if address is weird)
-        const chainId = Number(customIdParts[1]);
-        // The address may itself contain underscores if it's an ENS or some funky format, so rejoin everything after the chainId:
-        const address = customIdParts.slice(2).join("_");
-        assert(chainId,'Unable to find chain id')
-        assert(address,'Unable to find address')
-        await safeModel.setAddress(
-          guildId,
-          guildId,
-          Number(chainId),
-          address,
-        );
-        const allSafes = await safeModel.getAllAddresses(guildId);
-        const reply = getAdminManageSafesDisplay({allSafes})
-        reply.content = `Safe address changed to ${address}!\n` + reply.content
-        await (interaction as any).update({
-          ...reply,
-        });
-      }else if(interaction.customId.startsWith("manageSafe")){
+      }
+      if (await handleSafesButton(interaction, { safeModel })) {
+        return;
+      }
+      if(interaction.customId.startsWith("manageSafe")){
         // handle cancel logic
         if(interaction.customId.startsWith("manageSafe_cancel")){
           const guildId = interaction.guildId;
@@ -2702,34 +2595,7 @@ export async function main(): Promise<void> {
       if (await handleTokensSelectMenu(interaction, { tokenModel })) {
         return;
       }
-      if(interaction.customId.startsWith('manageSafe_removeSelect')){
-        const guildId = interaction.guildId!;
-        assert(guildId, "Guild not found");
-        const selectedValue = interaction.values[0]; // Format: "chainId:address"
-        assert(selectedValue, "No Safe selected to remove.");
-
-        const [chainIdStr, ...addressParts] = selectedValue.split(':');
-        const chainId = Number(chainIdStr);
-        const address = addressParts.join(':');
-        assert(chainId, "Invalid Safe selection: missing chainId.");
-        assert(address, "Invalid Safe selection: missing address.");
-
-        // Show confirmation before deleting
-        const chainName = ChainsById[chainId]?.name ?? chainId;
-        const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`manageSafe_confirmRemove_${chainId}:${address}`)
-            .setLabel("Yes, remove")
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId("manageSafe_cancel")
-            .setLabel("Cancel")
-            .setStyle(ButtonStyle.Secondary)
-        );
-        await interaction.update({
-          content: `⚠️ Are you sure you want to remove the Safe address \`${address}\` for **${chainName}**?`,
-          components: [confirmRow],
-        });
+      if (await handleSafesSelectMenu(interaction, { safeModel })) {
         return;
       }
       if(interaction.customId.startsWith('payoutChain_')){
