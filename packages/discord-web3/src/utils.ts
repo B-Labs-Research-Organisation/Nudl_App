@@ -327,6 +327,23 @@ export async function resolveDiscordUser(
   maybeId: string,
   guildId: string,
 ): Promise<User | null> {
+  // Normalize (support "Display Name (@username)" or "Display Name (username)")
+  const trimmed = maybeId.trim();
+  const parenMatch = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(trimmed);
+  if (parenMatch) {
+    const inner = parenMatch[2].trim();
+    const innerNoAt = inner.startsWith("@") ? inner.slice(1) : inner;
+
+    // Prefer resolving by the "unique name" inside parentheses first.
+    const byInner = await resolveDiscordUser(client, innerNoAt, guildId);
+    if (byInner) return byInner;
+
+    // Fall back to resolving by the outer display name.
+    maybeId = parenMatch[1].trim();
+  } else {
+    maybeId = trimmed;
+  }
+
   // Try direct user ID (snowflake)
   const idMatch = /^\d{15,21}$/.exec(maybeId);
   if (idMatch) {

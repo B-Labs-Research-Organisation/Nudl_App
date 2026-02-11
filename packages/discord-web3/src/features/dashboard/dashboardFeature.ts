@@ -548,7 +548,13 @@ export async function handleDashboardButton(
       return true;
     }
 
-    const prefill = members.map((m) => `${m.id},0`).join("\n");
+    const prefill = members
+      .map((m) => {
+        const display = m.displayName || m.user?.username || m.id;
+        const uname = m.user?.username;
+        return uname ? `${display} (@${uname}),0` : `${display},0`;
+      })
+      .join("\n");
     const chainName = ChainsById[payout.chainId]?.name ?? String(payout.chainId);
 
     const modal = new ModalBuilder()
