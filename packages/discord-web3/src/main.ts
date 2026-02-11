@@ -90,6 +90,11 @@ import {
   handleAddressAutocomplete,
   handleAddressesCommands,
 } from "./features/addresses/addressesFeature";
+import {
+  handleDashboardAdminCommand,
+  handleDashboardButton,
+  handleDashboardCommand,
+} from "./features/dashboard/dashboardFeature";
 
 
 const fakeEthAddresses = [
@@ -196,6 +201,14 @@ export async function main(): Promise<void> {
 
 
     const commands = [
+      new SlashCommandBuilder()
+        .setName("nudl")
+        .setDescription("Open the nudl dashboard")
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("nudl-admin")
+        .setDescription("Open the nudl admin dashboard")
+        .toJSON(),
       new SlashCommandBuilder()
         .setName("set_address")
         .setDescription("Sets the address for a specific network")
@@ -525,6 +538,12 @@ export async function main(): Promise<void> {
       const { commandName } = interaction;
 
       try {
+        if (await handleDashboardCommand(interaction)) {
+          return;
+        }
+        if (await handleDashboardAdminCommand(interaction)) {
+          return;
+        }
         if (commandName === "ping") {
           await interaction.reply("Pong!");
         } else if (commandName === "openmodal") {
@@ -1200,6 +1219,9 @@ export async function main(): Promise<void> {
         }
       }
     } else if (interaction.isButton()) {
+      if (await handleDashboardButton(interaction)) {
+        return;
+      }
       if (await handleTokensButton(interaction, { tokenModel })) {
         return;
       }
