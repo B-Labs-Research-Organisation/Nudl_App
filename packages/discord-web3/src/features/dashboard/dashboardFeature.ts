@@ -3,18 +3,26 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  ChannelSelectMenuBuilder,
   Interaction,
   MessageFlags,
   ModalBuilder,
   PermissionsBitField,
+  RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
+  TextChannel,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
 import assert from "assert";
 
-import { Chains, ChainsById, getAdminManageSafesDisplay, getAdminManageTokensDisplay } from "../../utils";
+import {
+  Chains,
+  ChainsById,
+  getAdminManageSafesDisplay,
+  getAdminManageTokensDisplay,
+} from "../../utils";
 
 export type DashboardDeps = {
   userModel: {
@@ -401,6 +409,141 @@ export async function handleDashboardButton(
     return true;
   }
 
+  if (interaction.customId.startsWith("dash:admin:payout:recipients:")) {
+    const parts = interaction.customId.split(":");
+    const payoutId = parts[4];
+    const mode = parts[5];
+
+    const payout = deps.stores.payouts[payoutId];
+    assert(payout, "Payout session not found");
+
+    if (mode === "manual") {
+      const chainName = ChainsById[payout.chainId]?.name ?? String(payout.chainId);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`payoutModal_${payoutId}`)
+        .setTitle(`Paste ${payout.type} payout CSV (${chainName})`);
+
+      const input = new TextInputBuilder()
+        .setCustomId(`csvInput`)
+        .setLabel("Paste CSV (discordid,amount per line)")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true);
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+      );
+
+      await (interaction as ButtonInteraction).showModal(modal);
+      return true;
+    }
+
+    // store the chosen mode so selects can update the right fields
+    payout.recipientsMode = mode;
+
+    const rows: any[] = [];
+
+    if (mode === "role" || mode === "role-channel") {
+      rows.push(
+        new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+          new RoleSelectMenuBuilder()
+            .setCustomId(`dash:admin:payout:role:${payoutId}`)
+            .setPlaceholder("Select a role…")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+    }
+
+    if (mode === "channel" || mode === "role-channel") {
+      rows.push(
+        new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+          new ChannelSelectMenuBuilder()
+            .setCustomId(`dash:admin:payout:channel:${payoutId}`)
+            .setPlaceholder("Select a channel…")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+    }
+
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:prefill:${payoutId}`)
+          .setLabel("Prefill CSV (userId,0) + open modal")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin")
+          .setLabel("Cancel / Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
+
+    await (interaction as ButtonInteraction).reply({
+      content:
+        "Choose recipients. We’ll prefill the CSV with `userId,0` so you only edit amounts.",
+      components: rows,
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:payout:prefill:")) {
+    const payoutId = interaction.customId.split(":")[4];
+    const payout = deps.stores.payouts[payoutId];
+    assert(payout, "Payout session not found");
+
+    const guild = interaction.guild;
+    assert(guild, "This command can only be used within a guild.");
+
+    await guild.members.fetch();
+    let members = Array.from(guild.members.cache.values()).filter((m) => !m.user.bot);
+
+    if (payout.recipientsMode === "role" || payout.recipientsMode === "role-channel") {
+      assert(payout.roleId, "Select a role first");
+      members = members.filter((m) => m.roles.cache.has(payout.roleId));
+    }
+
+    if (payout.recipientsMode === "channel" || payout.recipientsMode === "role-channel") {
+      assert(payout.channelId, "Select a channel first");
+      const ch = await guild.channels.fetch(payout.channelId);
+      assert(ch && ch.isTextBased(), "Must be a text channel");
+      const channelMembers = (ch as TextChannel).members;
+      members = members.filter((m) => channelMembers.has(m.id));
+    }
+
+    if (!members.length) {
+      await (interaction as ButtonInteraction).reply({
+        content: "No matching users found for that filter.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const prefill = members.map((m) => `${m.id},0`).join("\n");
+    const chainName = ChainsById[payout.chainId]?.name ?? String(payout.chainId);
+
+    const modal = new ModalBuilder()
+      .setCustomId(`payoutModal_${payoutId}`)
+      .setTitle(`Set amounts (${chainName})`);
+
+    const input = new TextInputBuilder()
+      .setCustomId(`csvInput`)
+      .setLabel("Edit amounts (userId,amount)")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setValue(prefill);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+    );
+
+    await (interaction as ButtonInteraction).showModal(modal);
+    return true;
+  }
+
   return false;
 }
 
@@ -408,7 +551,13 @@ export async function handleDashboardSelectMenu(
   interaction: Interaction,
   deps: DashboardDeps,
 ): Promise<boolean> {
-  if (!interaction.isStringSelectMenu()) return false;
+  if (
+    !interaction.isStringSelectMenu() &&
+    !interaction.isRoleSelectMenu() &&
+    !interaction.isChannelSelectMenu()
+  ) {
+    return false;
+  }
 
   if (interaction.customId === "dash:user:add:network") {
     const chainId = Number(interaction.values[0]);
@@ -464,7 +613,7 @@ export async function handleDashboardSelectMenu(
       "Invalid platform",
     );
 
-    const chainId = Number(interaction.values[0]);
+    const chainId = Number((interaction as any).values[0]);
     assert(chainId, "Invalid chain");
 
     // Create payout session configured by platform + chain
@@ -479,23 +628,70 @@ export async function handleDashboardSelectMenu(
 
     const chainName = ChainsById[chainId]?.name ?? String(chainId);
 
-    const modal = new ModalBuilder()
-      .setCustomId(`payoutModal_${payoutId}`)
-      .setTitle(`Paste ${platform} payout CSV (${chainName})`);
+    const rows = [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:recipients:${payoutId}:manual`)
+          .setLabel("Manual paste")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:recipients:${payoutId}:role`)
+          .setLabel("By role")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:recipients:${payoutId}:channel`)
+          .setLabel("By channel")
+          .setStyle(ButtonStyle.Primary),
+      ),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:recipients:${payoutId}:role-channel`)
+          .setLabel("Role + channel")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin")
+          .setLabel("Cancel / Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ];
 
-    const input = new TextInputBuilder()
-      .setCustomId(`csvInput`)
-      .setLabel("Paste CSV (discordid,amount per line)")
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true);
+    await (interaction as any).update({
+      content:
+        `**Recipients** — ${platform} on **${chainName}**\n\n` +
+        `Choose how to build the recipient list.`,
+      components: rows,
+    });
 
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
-    );
+    return true;
+  }
 
-    // Note: once the modal is opened, Discord doesn’t let us attach a Cancel button.
-    // The Cancel/Back button is provided on the previous step (network selection).
-    await (interaction as StringSelectMenuInteraction).showModal(modal);
+  if (interaction.customId.startsWith("dash:admin:payout:role:")) {
+    const payoutId = interaction.customId.split(":")[4];
+    const payout = deps.stores.payouts[payoutId];
+    assert(payout, "Payout session not found");
+
+    payout.roleId = (interaction as any).values?.[0];
+
+    await (interaction as any).reply({
+      content: `Role selected. Now click the prefill button to open the amounts modal.`,
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:payout:channel:")) {
+    const payoutId = interaction.customId.split(":")[4];
+    const payout = deps.stores.payouts[payoutId];
+    assert(payout, "Payout session not found");
+
+    payout.channelId = (interaction as any).values?.[0];
+
+    await (interaction as any).reply({
+      content: `Channel selected. Now click the prefill button to open the amounts modal.`,
+      flags: MessageFlags.Ephemeral,
+    });
+
     return true;
   }
 
