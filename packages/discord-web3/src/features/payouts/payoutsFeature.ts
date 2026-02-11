@@ -136,6 +136,51 @@ export async function handlePayoutsModalSubmit(
     assert(csvData, "Payout amounts not found");
     payout.csvData = csvData;
 
+    // If dashboard already selected network + platform, skip chain selection.
+    if (payout.chainId && payout.type) {
+      const chainId = Number(payout.chainId);
+      const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+      if (payout.type === "disperse") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`dispersePayoutButton_${payoutId}`)
+            .setLabel(`Generate Disperse file (${chainName})`)
+            .setStyle(ButtonStyle.Primary),
+        );
+
+        await interaction.reply({
+          content:
+            `✅ CSV captured for **Disperse** on **${chainName}**.\n` +
+            `Click below to generate the file.`,
+          components: [row],
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      if (payout.type === "safe") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`safePayoutButton_${payoutId}`)
+            .setLabel(`Continue Safe setup (${chainName})`)
+            .setStyle(ButtonStyle.Success),
+        );
+
+        await interaction.reply({
+          content:
+            `✅ CSV captured for **Safe** on **${chainName}**.\n` +
+            `Next: pick Safe + Token (we’ll autofill if possible).`,
+          components: [row],
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+    }
+
+    // Default legacy flow: ask for network
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`payoutChain_${payoutId}`)

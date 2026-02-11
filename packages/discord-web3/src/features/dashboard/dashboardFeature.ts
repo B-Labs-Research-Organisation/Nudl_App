@@ -332,29 +332,71 @@ export async function handleDashboardButton(
       return true;
     }
 
-    // Create a payout session and reuse existing payoutModal_<id> handler
-    const payoutId = String(Date.now());
-    deps.stores.payouts[payoutId] = {
-      id: payoutId,
-      list: [],
-      csvData: "",
-    };
+    const rows = [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin:payout:platform:safe")
+          .setLabel("Safe")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId("dash:admin:payout:platform:disperse")
+          .setLabel("Disperse")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin:payout:platform:csv-airdrop")
+          .setLabel("CSV Airdrop")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+      ),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin")
+          .setLabel("← Back to Backoffice")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ];
 
-    const modal = new ModalBuilder()
-      .setCustomId(`payoutModal_${payoutId}`)
-      .setTitle("Paste payout CSV");
+    await (interaction as ButtonInteraction).update({
+      content:
+        "**Start payout**\n\nChoose platform (we’ll only ask for what’s required):",
+      components: rows,
+    });
 
-    const input = new TextInputBuilder()
-      .setCustomId(`csvInput`)
-      .setLabel("Paste CSV (discordid,amount per line)")
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true);
+    return true;
+  }
 
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+  if (interaction.customId.startsWith("dash:admin:payout:platform:")) {
+    const platform = interaction.customId.split(":")[4];
+    assert(platform === "safe" || platform === "disperse" || platform === "csv-airdrop", "Invalid platform");
+
+    if (platform === "csv-airdrop") {
+      await (interaction as ButtonInteraction).reply({
+        content: "CSV Airdrop wizard is WIP (backend is partially stubbed).",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    // Choose network next
+    const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`dash:admin:payout:network:${platform}`)
+        .setPlaceholder("Select a network...")
+        .addOptions(
+          Chains.map((c) => ({
+            label: c.name,
+            value: String(c.chainId),
+            description: c.shortName ? `(${c.shortName})` : undefined,
+          })),
+        ),
     );
 
-    await (interaction as ButtonInteraction).showModal(modal);
+    await (interaction as ButtonInteraction).reply({
+      content: `Select a network for **${platform}** payout:`,
+      components: [networkRow],
+      flags: MessageFlags.Ephemeral,
+    });
+
     return true;
   }
 
@@ -411,6 +453,43 @@ export async function handleDashboardSelectMenu(
       flags: MessageFlags.Ephemeral,
     });
 
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:payout:network:")) {
+    const platform = interaction.customId.split(":")[4];
+    assert(platform === "safe" || platform === "disperse", "Invalid platform");
+
+    const chainId = Number(interaction.values[0]);
+    assert(chainId, "Invalid chain");
+
+    // Create payout session configured by platform + chain
+    const payoutId = String(Date.now());
+    deps.stores.payouts[payoutId] = {
+      id: payoutId,
+      type: platform,
+      chainId,
+      list: [],
+      csvData: "",
+    };
+
+    const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+    const modal = new ModalBuilder()
+      .setCustomId(`payoutModal_${payoutId}`)
+      .setTitle(`Paste ${platform} payout CSV (${chainName})`);
+
+    const input = new TextInputBuilder()
+      .setCustomId(`csvInput`)
+      .setLabel("Paste CSV (discordid,amount per line)")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+    );
+
+    await (interaction as StringSelectMenuInteraction).showModal(modal);
     return true;
   }
 
