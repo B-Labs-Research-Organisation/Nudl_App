@@ -94,6 +94,7 @@ import {
   handleDashboardAdminCommand,
   handleDashboardButton,
   handleDashboardCommand,
+  handleDashboardSelectMenu,
 } from "./features/dashboard/dashboardFeature";
 
 
@@ -538,7 +539,7 @@ export async function main(): Promise<void> {
       const { commandName } = interaction;
 
       try {
-        if (await handleDashboardCommand(interaction)) {
+        if (await handleDashboardCommand(interaction, { userModel })) {
           return;
         }
         if (await handleDashboardAdminCommand(interaction)) {
@@ -1219,7 +1220,7 @@ export async function main(): Promise<void> {
         }
       }
     } else if (interaction.isButton()) {
-      if (await handleDashboardButton(interaction)) {
+      if (await handleDashboardButton(interaction, { userModel })) {
         return;
       }
       if (await handleTokensButton(interaction, { tokenModel })) {
@@ -1573,6 +1574,9 @@ export async function main(): Promise<void> {
       }
     }
     if (interaction.isStringSelectMenu()){
+      if (await handleDashboardSelectMenu(interaction)) {
+        return;
+      }
       if (await handleTokensSelectMenu(interaction, { tokenModel })) {
         return;
       }
