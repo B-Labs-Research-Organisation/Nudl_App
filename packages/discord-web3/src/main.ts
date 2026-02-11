@@ -79,7 +79,11 @@ import {
   handleSafesModalSubmit,
   handleSafesSelectMenu,
 } from "./features/safes/safesFeature";
-import { handlePayoutsModalSubmit } from "./features/payouts/payoutsFeature";
+import {
+  handlePayoutsButton,
+  handlePayoutsModalSubmit,
+  handlePayoutsSelectMenu,
+} from "./features/payouts/payoutsFeature";
 
 
 const fakeEthAddresses = [
@@ -2118,6 +2122,17 @@ export async function main(): Promise<void> {
       if (await handleSafesButton(interaction, { safeModel })) {
         return;
       }
+      if (
+        await handlePayoutsButton(interaction, {
+          client,
+          userModel,
+          tokenModel,
+          safeModel,
+          stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+        })
+      ) {
+        return;
+      }
       if(interaction.customId.startsWith("manageSafe")){
         // handle cancel logic
         if(interaction.customId.startsWith("manageSafe_cancel")){
@@ -2608,133 +2623,16 @@ export async function main(): Promise<void> {
       if (await handleSafesSelectMenu(interaction, { safeModel })) {
         return;
       }
-      if(interaction.customId.startsWith('payoutChain_')){
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const selectedValue = interaction.values[0]; // Get the selected value
-        assert(selectedValue,'Unable to find Chain Id, try again')
-        payout.chainId = Number(selectedValue)
-        // INSERT_YOUR_CODE
-        // When a network is selected, show 3 buttons: Disperse, CSV Airdrop, and Safe
-        const selectedChainId = Number(selectedValue);
-        // We pass the payoutId and chainId to each button so subsequent handlers know what is being prepared
-        const actionsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`dispersePayoutButton_${payoutId}`)
-            .setLabel("Disperse")
-            .setStyle(ButtonStyle.Primary),
-          // new ButtonBuilder()
-          //   .setCustomId(`csvAirdropPayoutButton_${payoutId}`)
-          //   .setLabel("CSV Airdrop")
-          //   .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(`safePayoutButton_${payoutId}`)
-            .setLabel("Safe")
-            .setStyle(ButtonStyle.Success)
-        );
-
-        // const dispersePayout = {
-        //   id: payoutId,
-        //   chainId:payout.chainId,
-        //   donateAmount:0,
-        // };
-        // dispersePayouts[payoutId] = dispersePayout;
-        await interaction.update({
-          content: `You selected: **${ChainsById[selectedChainId]?.name ?? selectedChainId}**!\nChoose a payout method:`,
-          components: [actionsRow],
-        });
-      }else if(interaction.customId.startsWith('payoutSafeSelect_')){
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const selectedValue = interaction.values[0]; // Get the selected value
-        assert(selectedValue,'Unable to find safe, try again')
-        const guildId = interaction.guildId;
-        assert(guildId, "Guild ID not found");
-        const chainId = payout.chainId;
-        assert(chainId, "Chain ID not found");
-        const chainName = ChainsById[chainId]?.name ?? `Chain ID ${chainId}`;
-        const safeAddress = await safeModel.getAddress(guildId,guildId, chainId);
-        if(selectedValue === "ADD_SAFE"){
-          const modal = new ModalBuilder()
-            .setCustomId(`addSafeModal_${payoutId}`)
-            .setTitle(`Add New Safe for ${chainName}`)
-
-          // Token Address
-          const addressInput = new TextInputBuilder()
-            .setCustomId("safeAddress")
-            .setLabel(`Add Safe Address`)
-            .setPlaceholder(safeAddress ?? "0x...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-          // Modal rows
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput)
-          );
-          await interaction.showModal(modal);
-        }else{
-          const safeAddress = await safeModel.getAddress(guildId,guildId, chainId);
-          assert(safeAddress,'Safe not found')
-          payout.safeAddress = safeAddress 
-          await interaction.update(renderSafePayoutSetupRow(payout));
-        }
-      }else if(interaction.customId.startsWith('payoutTokenSelect_')){
-        const [_, payoutId] = interaction.customId.split("_");
-        const payout = payouts[payoutId];
-        if (!payout) {
-          await interaction.reply({
-            content: `Unable to find payout list, try searching again`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const selectedValue = interaction.values[0]; // Get the selected value
-        assert(selectedValue,'Unable to find token, try again')
-        const guildId = interaction.guildId;
-        assert(guildId, "Guild ID not found");
-        const chainId = payout.chainId;
-        assert(chainId, "Chain ID not found");
-        const chainName = ChainsById[chainId]?.name ?? `Chain ID ${chainId}`;
-        if(selectedValue === "ADD_TOKEN"){
-          const modal = new ModalBuilder()
-            .setCustomId(`addTokenModal_${payoutId}`)
-            .setTitle(`Add New Token for ${chainName}`)
-
-          // Token Address
-          const addressInput = new TextInputBuilder()
-            .setCustomId("tokenAddress")
-            .setLabel(`Add Token Address`)
-            .setPlaceholder("0x...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-          // Modal rows
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput)
-          );
-
-          await interaction.showModal(modal);
-        }else{
-          const token = await tokenModel.getToken(guildId,chainId, selectedValue);
-          assert(token,'Token not found')
-          payout.tokenAddress = token.address
-          payout.decimals = token.decimals
-          await interaction.update(renderSafePayoutSetupRow(payout));
-        }
+      if (
+        await handlePayoutsSelectMenu(interaction, {
+          client,
+          userModel,
+          tokenModel,
+          safeModel,
+          stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+        })
+      ) {
+        return;
       }
     }
   });

@@ -1,8 +1,15 @@
 import {
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
   Interaction,
   MessageFlags,
+  ModalBuilder,
   StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
+  TextInputBuilder,
+  TextInputStyle,
   User,
 } from "discord.js";
 import assert from "assert";
@@ -14,6 +21,8 @@ import {
   dispersePayout,
   generateSafeTransactionBatch,
   parseRecipientsCsvAndResolveAddresses,
+  renderPayoutPrefill,
+  renderSafePayoutSetupRow,
   resolveDiscordUser,
 } from "../../utils";
 
@@ -31,6 +40,22 @@ export type PayoutsFeatureDeps = {
       chainId: number,
       address: string,
     ): Promise<void>;
+  };
+  tokenModel?: {
+    getToken(
+      guildId: string,
+      chainId: number,
+      address: string,
+    ): Promise<any | undefined>;
+    getTokensByGuild(guildId: string): Promise<any[]>;
+  };
+  safeModel?: {
+    getAllAddresses(guildId: string): Promise<any[]>;
+    getAddress(
+      userId: string,
+      guildId: string,
+      chainId: number,
+    ): Promise<string | undefined>;
   };
   stores: {
     payouts: Record<string, any>;
@@ -312,6 +337,471 @@ export async function handlePayoutsModalSubmit(
       content: description,
       files: [file],
     });
+
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Handles payout-related button interactions.
+ */
+export async function handlePayoutsButton(
+  interaction: Interaction,
+  deps: PayoutsFeatureDeps,
+): Promise<boolean> {
+  if (!interaction.isButton()) return false;
+
+  const { client, userModel, tokenModel, safeModel, stores } = deps;
+  const { payouts } = stores;
+
+  // Safe payout generation once setup is complete
+  if (interaction.customId.startsWith("safePayoutGenerate_")) {
+    assert(tokenModel, "tokenModel required");
+
+    await (interaction as ButtonInteraction).deferReply({
+      flags: MessageFlags.Ephemeral,
+    });
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await (interaction as ButtonInteraction).editReply({
+        content: `Unable to find payout list, try searching again`,
+      });
+      return true;
+    }
+
+    assert(payout.chainId, "Unable to find payout chain");
+    assert(payout.safeAddress, "Unable to find safe address");
+    assert(payout.tokenAddress, "Unable to find token address");
+    assert(payout.decimals, "Unable to find token decimals");
+    assert(payout.csvData, "Unable to payout CSV list");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const token = await tokenModel.getToken(
+      guildId,
+      payout.chainId,
+      payout.tokenAddress,
+    );
+    assert(token, "Unable to find token");
+
+    const { addressEntries, errors } =
+      await parseRecipientsCsvAndResolveAddresses({
+        client,
+        csvData: payout.csvData,
+        guildId,
+        userModel,
+        chainId: payout.chainId,
+      });
+
+    const batchResult = generateSafeTransactionBatch({
+      entries: addressEntries,
+      chainId: payout.chainId,
+      safeAddress: payout.safeAddress,
+      erc20Address: payout.tokenAddress,
+      decimals: payout.decimals,
+      description: `Generated for safe ${payout.safeAddress}`,
+    });
+
+    const allErrors = [...errors, ...(batchResult.errors || [])];
+    const batchJson = JSON.stringify(batchResult.batch, null, 2);
+
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+
+    const files = [
+      {
+        name: `safe_batch_${dateStr}.json`,
+        attachment: Buffer.from(batchJson, "utf-8"),
+      },
+    ];
+
+    const chainName = ChainsById[payout.chainId]?.name ?? "Unknown Chain";
+    const tokenName = token.name ?? "Unknown Token";
+    const tokenSymbol = token.symbol ?? "Unknown Token Symbol";
+
+    let content = `✅ SAFE JSON file generated for ${addressEntries.length} entries on ${chainName} using ${tokenName} (${tokenSymbol}).`;
+    content += `\n💸 ___Total amount to transfer___: **${batchResult.totalAmountFormatted} ${tokenSymbol}**`;
+
+    if (allErrors.length > 0) {
+      content += `\n\n⚠️ Some issues were found:\n\`\`\`\n${allErrors.join("\n")}\n\`\`\``;
+    }
+
+    await (interaction as ButtonInteraction).editReply({
+      content,
+      files,
+    });
+
+    return true;
+  }
+
+  // Set safe button (show safe select)
+  if (interaction.customId.startsWith("setSafeButton_")) {
+    assert(safeModel, "safeModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    assert(payout.chainId, "Unable to find payout chain");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const allSafes = await safeModel.getAllAddresses(guildId);
+    const safesByChain = allSafes.filter((safe: any) => safe.chainId === payout.chainId);
+
+    const safeOptions = safesByChain.map(({ address, chainId }: any) => ({
+      label: `${address} (${chainId})`,
+      value: address,
+    }));
+
+    const overrideSafeMessage = `Replace exising Safe address on network`;
+    const addSafeMessage = `Add new Safe address on network`;
+
+    safeOptions.unshift({
+      label: `➕ ${safeOptions.length > 0 ? overrideSafeMessage : addSafeMessage}`,
+      value: `ADD_SAFE`,
+    });
+
+    const safeSelectionRow =
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`payoutSafeSelect_${payoutId}`)
+          .setPlaceholder(
+            `${safeOptions.length > 1 ? "Select Safe or change it" : "Add new Safe address"}`,
+          )
+          .addOptions(safeOptions),
+      );
+
+    const result = await (interaction as ButtonInteraction).update({
+      content: `Select a Safe to use for payout, or add a new safe on ${ChainsById[payout.chainId]?.name ?? payout.chainId}:`,
+      components: [safeSelectionRow],
+    });
+
+    // maintain existing side-effect
+    if ((result as any).interaction?.type === 3) {
+      payout.messageId = (result as any).interaction.message.id;
+      payout.channelId = interaction.channelId;
+    }
+
+    return true;
+  }
+
+  // Safe payout setup view
+  if (interaction.customId.startsWith("safePayoutButton_")) {
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const csvData = payout.csvData;
+    assert(csvData, "Token amounts not found");
+    assert(interaction.guildId, "Guild not found");
+    assert(payout.chainId, "ChainId not found");
+
+    await (interaction as ButtonInteraction).update(renderSafePayoutSetupRow(payout));
+    return true;
+  }
+
+  // Set token button (show token select)
+  if (interaction.customId.startsWith("setTokenButton_")) {
+    assert(tokenModel, "tokenModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    assert(payout.chainId, "Unable to find payout chain");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const savedTokens: { address: string; symbol: string; chainId: number }[] =
+      await tokenModel.getTokensByGuild(guildId);
+
+    const selectedChainId = payout.chainId;
+    const filteredTokens = savedTokens.filter((t) => t.chainId === selectedChainId);
+
+    const tokenOptions = filteredTokens.map(({ address, symbol }) => ({
+      label: symbol ? `${symbol}: ${address}` : address,
+      value: address,
+    }));
+
+    tokenOptions.unshift({
+      label: "➕ Add a new token (not listed)",
+      value: `ADD_TOKEN`,
+    });
+
+    const tokenSelectRow =
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`payoutTokenSelect_${payoutId}`)
+          .setPlaceholder("Choose an existing token, or add a new one")
+          .addOptions(tokenOptions),
+      );
+
+    await (interaction as ButtonInteraction).update({
+      content: `Select a token to use for payout, or add a new token on ${ChainsById[selectedChainId]?.name ?? selectedChainId}:`,
+      components: [tokenSelectRow],
+    });
+
+    return true;
+  }
+
+  // Disperse payout button
+  if (interaction.customId.startsWith("dispersePayoutButton_")) {
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const csvData = payout.csvData;
+    assert(csvData, "Token amounts not found");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const chainId = payout.chainId;
+    assert(chainId, "ChainId not found");
+
+    const { addressEntries, errors } =
+      await parseRecipientsCsvAndResolveAddresses({
+        client,
+        csvData,
+        guildId,
+        userModel,
+        chainId,
+      });
+
+    const { file, description } = dispersePayout({
+      addressEntries,
+      chainId,
+      donateAmount: 0,
+      donateAddress: process.env.DONATE_ADDRESS,
+      errors,
+    });
+
+    await interaction.reply({
+      content: description,
+      files: [file],
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  // Create payout button: open modal
+  if (interaction.customId.startsWith("create_payout_")) {
+    const payoutId = interaction.customId.split("_")[2];
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`payoutModal_${payoutId}`)
+      .setTitle("Edit payout amounts for users");
+
+    const preset = renderPayoutPrefill(payout.list);
+    const input = new TextInputBuilder()
+      .setCustomId(`csvInput`)
+      .setLabel("Set token amounts for each user")
+      .setStyle(TextInputStyle.Paragraph)
+      .setValue(preset)
+      .setRequired(true);
+
+    const actionRow = new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+    modal.addComponents(actionRow);
+
+    await (interaction as ButtonInteraction).showModal(modal);
+    return true;
+  }
+
+  // safePayoutModal_ and dispersePayoutModal_ buttons are still handled in main.ts
+  return false;
+}
+
+/**
+ * Handles payout-related select menu interactions.
+ */
+export async function handlePayoutsSelectMenu(
+  interaction: Interaction,
+  deps: PayoutsFeatureDeps,
+): Promise<boolean> {
+  if (!interaction.isStringSelectMenu()) return false;
+
+  const { tokenModel, safeModel, stores } = deps;
+  const { payouts } = stores;
+
+  if (interaction.customId.startsWith("payoutChain_")) {
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const selectedValue = interaction.values[0];
+    assert(selectedValue, "Unable to find Chain Id, try again");
+
+    payout.chainId = Number(selectedValue);
+
+    const selectedChainId = Number(selectedValue);
+    const actionsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`dispersePayoutButton_${payoutId}`)
+        .setLabel("Disperse")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`safePayoutButton_${payoutId}`)
+        .setLabel("Safe")
+        .setStyle(ButtonStyle.Success),
+    );
+
+    await (interaction as StringSelectMenuInteraction).update({
+      content: `You selected: **${ChainsById[selectedChainId]?.name ?? selectedChainId}**!\nChoose a payout method:`,
+      components: [actionsRow],
+    });
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("payoutSafeSelect_")) {
+    assert(safeModel, "safeModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const selectedValue = interaction.values[0];
+    assert(selectedValue, "Unable to find safe, try again");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild ID not found");
+
+    const chainId = payout.chainId;
+    assert(chainId, "Chain ID not found");
+
+    const chainName = ChainsById[chainId]?.name ?? `Chain ID ${chainId}`;
+    const existingSafeAddress = await safeModel.getAddress(guildId, guildId, chainId);
+
+    if (selectedValue === "ADD_SAFE") {
+      const modal = new ModalBuilder()
+        .setCustomId(`addSafeModal_${payoutId}`)
+        .setTitle(`Add New Safe for ${chainName}`);
+
+      const addressInput = new TextInputBuilder()
+        .setCustomId("safeAddress")
+        .setLabel(`Add Safe Address`)
+        .setPlaceholder(existingSafeAddress ?? "0x...")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput),
+      );
+
+      await (interaction as StringSelectMenuInteraction).showModal(modal);
+      return true;
+    }
+
+    const safeAddress = await safeModel.getAddress(guildId, guildId, chainId);
+    assert(safeAddress, "Safe not found");
+
+    payout.safeAddress = safeAddress;
+    await (interaction as StringSelectMenuInteraction).update(
+      renderSafePayoutSetupRow(payout),
+    );
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("payoutTokenSelect_")) {
+    assert(tokenModel, "tokenModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const selectedValue = interaction.values[0];
+    assert(selectedValue, "Unable to find token, try again");
+
+    const chainId = payout.chainId;
+    assert(chainId, "Chain ID not found");
+
+    const chainName = ChainsById[chainId]?.name ?? `Chain ID ${chainId}`;
+
+    if (selectedValue === "ADD_TOKEN") {
+      const modal = new ModalBuilder()
+        .setCustomId(`addTokenModal_${payoutId}`)
+        .setTitle(`Add New Token for ${chainName}`);
+
+      const addressInput = new TextInputBuilder()
+        .setCustomId("tokenAddress")
+        .setLabel(`Add Token Address`)
+        .setPlaceholder("0x...")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(addressInput),
+      );
+
+      await (interaction as StringSelectMenuInteraction).showModal(modal);
+      return true;
+    }
+
+    // If an existing token was selected, set on payout and rerender.
+    payout.tokenAddress = selectedValue;
+    await (interaction as StringSelectMenuInteraction).update(
+      renderSafePayoutSetupRow(payout),
+    );
 
     return true;
   }
