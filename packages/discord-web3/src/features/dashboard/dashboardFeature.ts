@@ -499,24 +499,50 @@ export async function handleDashboardButton(
     assert(guild, "This command can only be used within a guild.");
 
     await guild.members.fetch();
-    let members = Array.from(guild.members.cache.values()).filter((m) => !m.user.bot);
+
+    // Build candidate set from role/channel sources directly (more reliable than filtering the full member list).
+    let members: any[] | null = null;
 
     if (payout.recipientsMode === "role" || payout.recipientsMode === "role-channel") {
       assert(payout.roleId, "Select a role first");
-      members = members.filter((m) => m.roles.cache.has(payout.roleId));
+      await guild.roles.fetch();
+      const role = guild.roles.cache.get(payout.roleId);
+      assert(role, "Role not found");
+      members = Array.from(role.members.values()).filter((m) => !m.user.bot);
     }
 
     if (payout.recipientsMode === "channel" || payout.recipientsMode === "role-channel") {
       assert(payout.channelId, "Select a channel first");
       const ch = await guild.channels.fetch(payout.channelId);
       assert(ch && ch.isTextBased(), "Must be a text channel");
-      const channelMembers = (ch as TextChannel).members;
-      members = members.filter((m) => channelMembers.has(m.id));
+      const channelMembers = Array.from((ch as TextChannel).members.values()).filter(
+        (m) => !m.user.bot,
+      );
+
+      if (members === null) {
+        members = channelMembers;
+      } else {
+        const channelSet = new Set(channelMembers.map((m) => m.id));
+        members = members.filter((m) => channelSet.has(m.id));
+      }
+    }
+
+    if (members === null) {
+      // manual mode should not hit prefill normally, but be defensive
+      members = Array.from(guild.members.cache.values()).filter((m) => !m.user.bot);
     }
 
     if (!members.length) {
+      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin")
+          .setLabel("← Back to Backoffice")
+          .setStyle(ButtonStyle.Secondary),
+      );
+
       await (interaction as ButtonInteraction).reply({
         content: "No matching users found for that filter.",
+        components: [backRow],
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -672,9 +698,12 @@ export async function handleDashboardSelectMenu(
 
     payout.roleId = (interaction as any).values?.[0];
 
-    await (interaction as any).reply({
-      content: `Role selected. Now click the prefill button to open the amounts modal.`,
-      flags: MessageFlags.Ephemeral,
+    await (interaction as any).update({
+      content:
+        `Role selected (<@&${payout.roleId}>).\n` +
+        `Now click **Prefill CSV** to open the amounts modal.`,
+      // keep existing components
+      components: (interaction as any).message?.components ?? [],
     });
 
     return true;
@@ -687,9 +716,11 @@ export async function handleDashboardSelectMenu(
 
     payout.channelId = (interaction as any).values?.[0];
 
-    await (interaction as any).reply({
-      content: `Channel selected. Now click the prefill button to open the amounts modal.`,
-      flags: MessageFlags.Ephemeral,
+    await (interaction as any).update({
+      content:
+        `Channel selected (<#${payout.channelId}>).\n` +
+        `Now click **Prefill CSV** to open the amounts modal.`,
+      components: (interaction as any).message?.components ?? [],
     });
 
     return true;
