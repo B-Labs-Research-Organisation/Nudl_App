@@ -345,8 +345,7 @@ export async function handleDashboardButton(
         new ButtonBuilder()
           .setCustomId("dash:admin:payout:platform:csv-airdrop")
           .setLabel("CSV Airdrop")
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
+          .setStyle(ButtonStyle.Secondary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -367,15 +366,10 @@ export async function handleDashboardButton(
 
   if (interaction.customId.startsWith("dash:admin:payout:platform:")) {
     const platform = interaction.customId.split(":")[4];
-    assert(platform === "safe" || platform === "disperse" || platform === "csv-airdrop", "Invalid platform");
-
-    if (platform === "csv-airdrop") {
-      await (interaction as ButtonInteraction).reply({
-        content: "CSV Airdrop wizard is WIP (backend is partially stubbed).",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
+    assert(
+      platform === "safe" || platform === "disperse" || platform === "csv-airdrop",
+      "Invalid platform",
+    );
 
     // Choose network next
     const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -458,7 +452,10 @@ export async function handleDashboardSelectMenu(
 
   if (interaction.customId.startsWith("dash:admin:payout:network:")) {
     const platform = interaction.customId.split(":")[4];
-    assert(platform === "safe" || platform === "disperse", "Invalid platform");
+    assert(
+      platform === "safe" || platform === "disperse" || platform === "csv-airdrop",
+      "Invalid platform",
+    );
 
     const chainId = Number(interaction.values[0]);
     assert(chainId, "Invalid chain");
