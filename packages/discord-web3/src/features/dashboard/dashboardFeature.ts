@@ -385,9 +385,16 @@ export async function handleDashboardButton(
         ),
     );
 
+    const cancelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:admin")
+        .setLabel("Cancel / Back to Backoffice")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
     await (interaction as ButtonInteraction).reply({
       content: `Select a network for **${platform}** payout:`,
-      components: [networkRow],
+      components: [networkRow, cancelRow],
       flags: MessageFlags.Ephemeral,
     });
 
@@ -486,6 +493,8 @@ export async function handleDashboardSelectMenu(
       new ActionRowBuilder<TextInputBuilder>().addComponents(input),
     );
 
+    // Note: once the modal is opened, Discord doesn’t let us attach a Cancel button.
+    // The Cancel/Back button is provided on the previous step (network selection).
     await (interaction as StringSelectMenuInteraction).showModal(modal);
     return true;
   }
