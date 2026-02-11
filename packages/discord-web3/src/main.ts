@@ -79,6 +79,7 @@ import {
   handleSafesModalSubmit,
   handleSafesSelectMenu,
 } from "./features/safes/safesFeature";
+import { handlePayoutsModalSubmit } from "./features/payouts/payoutsFeature";
 
 
 const fakeEthAddresses = [
@@ -1712,6 +1713,15 @@ export async function main(): Promise<void> {
           return;
         }
         if (await handleSafesModalSubmit(interaction, { safeModel })) {
+          return;
+        }
+        if (
+          await handlePayoutsModalSubmit(interaction, {
+            client,
+            userModel,
+            stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+          })
+        ) {
           return;
         }
         if(interaction.customId.startsWith("addSafeModal_")){
