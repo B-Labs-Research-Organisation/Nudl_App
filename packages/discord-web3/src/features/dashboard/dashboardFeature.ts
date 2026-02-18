@@ -58,7 +58,7 @@ export async function handleDashboardCommand(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId("dash:user")
-        .setLabel("My Addresses")
+        .setLabel("Addresses")
         .setStyle(ButtonStyle.Primary),
     ),
   ];
@@ -119,58 +119,61 @@ export async function handleDashboardButton(
 ): Promise<boolean> {
   if (!interaction.isButton()) return false;
 
-  if (interaction.customId === "dash:user") {
+  if (interaction.customId === "dash:home") {
     const rows = [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId("dash:user:view")
-          .setLabel("View my addresses")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId("dash:user:add")
-          .setLabel("Add / update address")
+          .setCustomId("dash:user")
+          .setLabel("Addresses")
           .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId("dash:user:remove")
-          .setLabel("Remove address")
-          .setStyle(ButtonStyle.Danger),
       ),
     ];
 
     await (interaction as ButtonInteraction).update({
       content:
-        "**My Addresses**\n\n" +
-        "- View your saved addresses\n" +
-        "- Add/update an address via guided UI\n",
+        "**nudl**\n\n" +
+        "UI-first dashboard.\n" +
+        "Admins: use `/nudl-admin`.\n",
       components: rows,
     });
+
     return true;
   }
 
-  if (interaction.customId === "dash:user:view") {
+  if (interaction.customId === "dash:user") {
     const guildId = interaction.guildId!;
     const userId = interaction.user.id;
 
     const addresses = await deps.userModel.getUser(userId, guildId);
-    if (!addresses.length) {
-      await (interaction as ButtonInteraction).reply({
-        content: "No addresses set yet.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
+    const addressLines = addresses.length
+      ? addresses
+          .map(({ chainId, address }) => {
+            const chainName = ChainsById[chainId]?.name ?? String(chainId);
+            return `• **${chainName}** (${chainId}) — \`${address}\``;
+          })
+          .join("\n")
+      : "_No addresses set yet._";
 
-    // nicer formatting
-    const lines = addresses
-      .map(({ chainId, address }) => {
-        const chainName = ChainsById[chainId]?.name ?? String(chainId);
-        return `• **${chainName}** (${chainId}) — \`${address}\``;
-      })
-      .join("\n");
+    const rows = [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:user:add")
+          .setLabel("Add / update")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:user:remove")
+          .setLabel("Remove")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId("dash:home")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ];
 
-    await (interaction as ButtonInteraction).reply({
-      content: `**Your addresses**\n\n${lines}`,
-      flags: MessageFlags.Ephemeral,
+    await (interaction as ButtonInteraction).update({
+      content: `**Addresses**\n\n${addressLines}`,
+      components: rows,
     });
 
     return true;
@@ -190,10 +193,16 @@ export async function handleDashboardButton(
         ),
     );
 
-    await (interaction as ButtonInteraction).reply({
+    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:user")
+        .setLabel("← Back to Addresses")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await (interaction as ButtonInteraction).update({
       content: "Pick a network to remove:",
-      components: [networkRow],
-      flags: MessageFlags.Ephemeral,
+      components: [networkRow, backRow],
     });
 
     return true;
@@ -214,10 +223,16 @@ export async function handleDashboardButton(
         ),
     );
 
-    await (interaction as ButtonInteraction).reply({
+    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:user")
+        .setLabel("← Back to Addresses")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await (interaction as ButtonInteraction).update({
       content: "Pick a network to add/update:",
-      components: [networkRow],
-      flags: MessageFlags.Ephemeral,
+      components: [networkRow, backRow],
     });
 
     return true;
@@ -235,9 +250,37 @@ export async function handleDashboardButton(
 
     const chainName = ChainsById[chainId]?.name ?? String(chainId);
 
-    await (interaction as ButtonInteraction).reply({
-      content: `✅ Removed your address for **${chainName}** (${chainId}).`,
-      flags: MessageFlags.Ephemeral,
+    // Return to addresses screen (single-message flow)
+    const addresses = await deps.userModel.getUser(userId, guildId);
+    const addressLines = addresses.length
+      ? addresses
+          .map(({ chainId, address }) => {
+            const chainName = ChainsById[chainId]?.name ?? String(chainId);
+            return `• **${chainName}** (${chainId}) — \`${address}\``;
+          })
+          .join("\n")
+      : "_No addresses set yet._";
+
+    const rows = [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:user:add")
+          .setLabel("Add / update")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:user:remove")
+          .setLabel("Remove")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId("dash:home")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ];
+
+    await (interaction as ButtonInteraction).update({
+      content: `✅ Removed address for **${chainName}** (${chainId}).\n\n**Addresses**\n\n${addressLines}`,
+      components: rows,
     });
 
     return true;
