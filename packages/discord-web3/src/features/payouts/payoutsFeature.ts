@@ -136,6 +136,70 @@ export async function handlePayoutsModalSubmit(
     assert(csvData, "Payout amounts not found");
     payout.csvData = csvData;
 
+    // If dashboard already selected network + platform, skip chain selection.
+    if (payout.chainId && payout.type) {
+      const chainId = Number(payout.chainId);
+      const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+      if (payout.type === "disperse") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`dispersePayoutButton_${payoutId}`)
+            .setLabel(`Generate Disperse file (${chainName})`)
+            .setStyle(ButtonStyle.Primary),
+        );
+
+        await interaction.reply({
+          content:
+            `✅ CSV captured for **Disperse** on **${chainName}**.\n` +
+            `Click below to generate the file.`,
+          components: [row],
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      if (payout.type === "safe") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`safePayoutButton_${payoutId}`)
+            .setLabel(`Continue Safe setup (${chainName})`)
+            .setStyle(ButtonStyle.Success),
+        );
+
+        await interaction.reply({
+          content:
+            `✅ CSV captured for **Safe** on **${chainName}**.\n` +
+            `Next: pick Safe + Token (we’ll autofill if possible).`,
+          components: [row],
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      if (payout.type === "csv-airdrop") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`setTokenButton_${payoutId}`)
+            .setLabel(`Select token (${chainName})`)
+            .setStyle(ButtonStyle.Secondary),
+        );
+
+        await interaction.reply({
+          content:
+            `✅ CSV captured for **CSV Airdrop** on **${chainName}**.\n` +
+            `Next: select token (Safe CSV Airdrop needs token_address per row).`,
+          components: [row],
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+    }
+
+    // Default legacy flow: ask for network
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`payoutChain_${payoutId}`)
@@ -803,6 +867,70 @@ export async function handlePayoutsButton(
     return true;
   }
 
+  // CSV Airdrop (Safe app) generator
+  if (interaction.customId.startsWith("csvAirdropGenerate_")) {
+    assert(tokenModel, "tokenModel required");
+
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    assert(payout.type === "csv-airdrop", "Invalid payout type");
+    const csvData = payout.csvData;
+    assert(csvData, "Payout CSV not found");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const chainId = payout.chainId;
+    assert(chainId, "ChainId not found");
+
+    const tokenAddress = payout.tokenAddress;
+    assert(tokenAddress, "Token not selected");
+
+    const { addressEntries, errors } =
+      await parseRecipientsCsvAndResolveAddresses({
+        client,
+        csvData,
+        guildId,
+        userModel,
+        chainId,
+      });
+
+    const header = "token_address,receiver,amount";
+    const lines = addressEntries.map(
+      ([receiver, amount]) => `${tokenAddress},${receiver},${amount}`,
+    );
+
+    const out = [header, ...lines].join("\n") + "\n";
+
+    const chainName = ChainsById[Number(chainId)]?.name ?? String(chainId);
+
+    const contentLines = [
+      `✅ CSV Airdrop file generated for **${chainName}**.`,
+      errors.length ? `\n⚠️ Issues found:\n\`\`\`\n${errors.join("\n")}\n\`\`\`` : "",
+    ].filter(Boolean);
+
+    await interaction.reply({
+      content: contentLines.join("\n"),
+      files: [
+        {
+          name: `csv-airdrop_${chainName}_${Date.now()}.csv`,
+          attachment: Buffer.from(out, "utf-8"),
+        },
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
   // Create payout button: open modal
   if (interaction.customId.startsWith("create_payout_")) {
     const payoutId = interaction.customId.split("_")[2];
@@ -1029,8 +1157,34 @@ export async function handlePayoutsSelectMenu(
       return true;
     }
 
-    // If an existing token was selected, set on payout and rerender.
-    payout.tokenAddress = selectedValue;
+    const token = await tokenModel.getToken(
+      interaction.guildId!,
+      Number(chainId),
+      selectedValue,
+    );
+    assert(token, "Token not found");
+
+    // If an existing token was selected, set on payout.
+    payout.tokenAddress = token.address;
+    payout.decimals = token.decimals;
+
+    if (payout.type === "csv-airdrop") {
+      const generateRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`csvAirdropGenerate_${payoutId}`)
+          .setLabel("Generate CSV Airdrop file")
+          .setStyle(ButtonStyle.Primary),
+      );
+
+      await (interaction as StringSelectMenuInteraction).update({
+        content:
+          `Token selected: **${token.symbol ?? ""}** \`${token.address}\`\n` +
+          `Now generate the Safe CSV Airdrop transfer file.`,
+        components: [generateRow],
+      });
+      return true;
+    }
+
     await (interaction as StringSelectMenuInteraction).update(
       renderSafePayoutSetupRow(payout),
     );

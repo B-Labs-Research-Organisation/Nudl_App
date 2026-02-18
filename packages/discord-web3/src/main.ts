@@ -90,6 +90,12 @@ import {
   handleAddressAutocomplete,
   handleAddressesCommands,
 } from "./features/addresses/addressesFeature";
+import {
+  handleDashboardAdminCommand,
+  handleDashboardButton,
+  handleDashboardCommand,
+  handleDashboardSelectMenu,
+} from "./features/dashboard/dashboardFeature";
 
 
 const fakeEthAddresses = [
@@ -196,6 +202,14 @@ export async function main(): Promise<void> {
 
 
     const commands = [
+      new SlashCommandBuilder()
+        .setName("nudl")
+        .setDescription("Open the nudl dashboard")
+        .toJSON(),
+      new SlashCommandBuilder()
+        .setName("nudl-admin")
+        .setDescription("Open the nudl admin dashboard")
+        .toJSON(),
       new SlashCommandBuilder()
         .setName("set_address")
         .setDescription("Sets the address for a specific network")
@@ -525,6 +539,12 @@ export async function main(): Promise<void> {
       const { commandName } = interaction;
 
       try {
+        if (await handleDashboardCommand(interaction, { userModel, tokenModel, safeModel, stores: { payouts } })) {
+          return;
+        }
+        if (await handleDashboardAdminCommand(interaction)) {
+          return;
+        }
         if (commandName === "ping") {
           await interaction.reply("Pong!");
         } else if (commandName === "openmodal") {
@@ -1200,6 +1220,9 @@ export async function main(): Promise<void> {
         }
       }
     } else if (interaction.isButton()) {
+      if (await handleDashboardButton(interaction, { userModel, tokenModel, safeModel, stores: { payouts } })) {
+        return;
+      }
       if (await handleTokensButton(interaction, { tokenModel })) {
         return;
       }
@@ -1550,23 +1573,41 @@ export async function main(): Promise<void> {
         return;
       }
     }
-    if (interaction.isStringSelectMenu()){
-      if (await handleTokensSelectMenu(interaction, { tokenModel })) {
-        return;
-      }
-      if (await handleSafesSelectMenu(interaction, { safeModel })) {
-        return;
-      }
+    if (
+      interaction.isStringSelectMenu() ||
+      interaction.isRoleSelectMenu() ||
+      interaction.isChannelSelectMenu()
+    ) {
       if (
-        await handlePayoutsSelectMenu(interaction, {
-          client,
+        await handleDashboardSelectMenu(interaction, {
           userModel,
           tokenModel,
           safeModel,
-          stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+          stores: { payouts },
         })
       ) {
         return;
+      }
+
+      // Only string select menus apply to the existing feature handlers below.
+      if (interaction.isStringSelectMenu()) {
+        if (await handleTokensSelectMenu(interaction, { tokenModel })) {
+          return;
+        }
+        if (await handleSafesSelectMenu(interaction, { safeModel })) {
+          return;
+        }
+        if (
+          await handlePayoutsSelectMenu(interaction, {
+            client,
+            userModel,
+            tokenModel,
+            safeModel,
+            stores: { payouts, safeGenerations, dispersePayouts, csvAirdropPayouts },
+          })
+        ) {
+          return;
+        }
       }
     }
   });
