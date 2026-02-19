@@ -91,6 +91,10 @@ import {
   handleAddressesCommands,
 } from "./features/addresses/addressesFeature";
 import {
+  handleAddAddressModalSubmit,
+  handleConfirmOverrideButton,
+} from "./features/addresses/addressModalFlow";
+import {
   handleDashboardAdminCommand,
   handleDashboardButton,
   handleDashboardCommand,
@@ -194,6 +198,7 @@ export async function main(): Promise<void> {
       dispersePayouts,
       csvAirdropPayouts,
       payouts,
+      ui,
     },
   } = context;
 
@@ -539,7 +544,15 @@ export async function main(): Promise<void> {
       const { commandName } = interaction;
 
       try {
-        if (await handleDashboardCommand(interaction, { userModel, tokenModel, safeModel, stores: { payouts } })) {
+        if (
+          await handleDashboardCommand(interaction, {
+            userModel,
+            tokenModel,
+            safeModel,
+            stores: { payouts },
+            ui,
+          })
+        ) {
           return;
         }
         if (await handleDashboardAdminCommand(interaction)) {
@@ -1183,6 +1196,15 @@ export async function main(): Promise<void> {
           return;
         }
         if (
+          await handleAddAddressModalSubmit(interaction, {
+            client,
+            userModel,
+            ui,
+          })
+        ) {
+          return;
+        }
+        if (
           await handlePayoutsModalSubmit(interaction, {
             client,
             userModel,
@@ -1220,7 +1242,24 @@ export async function main(): Promise<void> {
         }
       }
     } else if (interaction.isButton()) {
-      if (await handleDashboardButton(interaction, { userModel, tokenModel, safeModel, stores: { payouts } })) {
+      if (
+        await handleDashboardButton(interaction, {
+          userModel,
+          tokenModel,
+          safeModel,
+          stores: { payouts },
+          ui,
+        })
+      ) {
+        return;
+      }
+      if (
+        await handleConfirmOverrideButton(interaction, {
+          client,
+          userModel,
+          ui,
+        })
+      ) {
         return;
       }
       if (await handleTokensButton(interaction, { tokenModel })) {
@@ -1584,6 +1623,7 @@ export async function main(): Promise<void> {
           tokenModel,
           safeModel,
           stores: { payouts },
+          ui,
         })
       ) {
         return;

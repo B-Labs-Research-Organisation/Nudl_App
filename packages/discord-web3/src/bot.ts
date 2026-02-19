@@ -66,6 +66,12 @@ export interface BotStores {
   dispersePayouts: DispersePayoutStore;
   csvAirdropPayouts: CsvAirdropPayoutStore;
   payouts: PayoutStore;
+  ui: {
+    /** key: `${guildId}:${userId}` */
+    lastUserAddressesHub: Record<string, { channelId: string; messageId: string }>;
+    /** key: `${guildId}:${userId}` */
+    pendingAddressOverride: Record<string, { chainId: number; address: string }>;
+  };
 }
 
 export interface BotModels {
@@ -136,6 +142,10 @@ export async function createBot(): Promise<BotContext> {
     dispersePayouts: {},
     csvAirdropPayouts: {},
     payouts: {},
+    ui: {
+      lastUserAddressesHub: {},
+      pendingAddressOverride: {},
+    },
   };
 
   return {

@@ -45,11 +45,15 @@ export type DashboardDeps = {
   stores: {
     payouts: Record<string, any>;
   };
+  ui: {
+    lastUserAddressesHub: Record<string, { channelId: string; messageId: string }>;
+    pendingAddressOverride: Record<string, { chainId: number; address: string }>;
+  };
 };
 
 export async function handleDashboardCommand(
   interaction: Interaction,
-  _deps: DashboardDeps,
+  deps: DashboardDeps,
 ): Promise<boolean> {
   if (!interaction.isChatInputCommand()) return false;
   if (interaction.commandName !== "nudl") return false;
@@ -71,6 +75,18 @@ export async function handleDashboardCommand(
     components: rows,
     flags: MessageFlags.Ephemeral,
   });
+
+  // Store the message id so modal submits can return to the hub by editing this message.
+  try {
+    const msg = await interaction.fetchReply();
+    const key = `${interaction.guildId}:${interaction.user.id}`;
+    deps.ui.lastUserAddressesHub[key] = {
+      channelId: interaction.channelId,
+      messageId: msg.id,
+    };
+  } catch {
+    // best effort
+  }
 
   return true;
 }
@@ -175,6 +191,13 @@ export async function handleDashboardButton(
       content: `**Addresses**\n\n${addressLines}`,
       components: rows,
     });
+
+    // Track the current hub message.
+    const key = `${guildId}:${userId}`;
+    deps.ui.lastUserAddressesHub[key] = {
+      channelId: interaction.channelId,
+      messageId: (interaction as ButtonInteraction).message.id,
+    };
 
     return true;
   }

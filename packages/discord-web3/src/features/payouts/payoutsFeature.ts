@@ -104,23 +104,6 @@ export async function handlePayoutsModalSubmit(
     return true;
   }
 
-  if (interaction.customId.startsWith("addAddress_")) {
-    const network = parseInt(interaction.customId.split("_")[1], 10);
-    const address = interaction.fields.getTextInputValue("addressInput");
-    const userId = interaction.user.id;
-    const guildId = interaction.guildId!;
-
-    await userModel.setAddress(userId, guildId, network, address);
-    const chain = ChainsById[network];
-    const chainName = chain ? chain.name : "Unknown Chain";
-
-    await interaction.reply({
-      content: `Address set for ${chainName} (${network}): ${address}`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return true;
-  }
-
   if (interaction.customId.startsWith("payoutModal_")) {
     const [_, payoutId] = interaction.customId.split("_");
     const payout = payouts[payoutId];
