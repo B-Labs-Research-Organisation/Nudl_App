@@ -263,7 +263,8 @@ export async function handleDashboardButton(
 
   // confirm removal
   if (interaction.customId.startsWith("dash:user:remove:confirm:")) {
-    const chainId = Number(interaction.customId.split(":")[3]);
+    // customId: dash:user:remove:confirm:<chainId>
+    const chainId = Number(interaction.customId.split(":")[4]);
     assert(chainId, "Invalid chain");
 
     const guildId = interaction.guildId!;
