@@ -512,15 +512,30 @@ export async function handleDashboardButton(
     const channelId = parts[7] !== "none" ? parts[7] : null;
     assert(chainId, "Invalid chain");
 
-    const missingUserIds = await (async () => {
+    const missingUserIdsOrRateLimit = await (async () => {
       const guild = interaction.guild;
       assert(guild, "This command can only be used within a guild.");
       const guildId = guild.id;
-      const allDiscordUsers = await guild.members.fetch();
+      let allDiscordUsers: any;
+      try {
+        allDiscordUsers = await guild.members.fetch();
+      } catch (err: any) {
+        const retryAfter = err?.data?.retry_after;
+        if (typeof retryAfter === "number") {
+          // Gateway rate limit: ask the admin to retry shortly instead of crashing the process.
+          return {
+            rateLimited: true as const,
+            retryAfter,
+          };
+        }
+        throw err;
+      }
       const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
       const usersWithAddresses = new Set(allAddresses.map((a) => a.userId));
-      let missing = Array.from(allDiscordUsers.values()).filter(
-        (m) => !usersWithAddresses.has(m.id) && !m.user.bot,
+      if ((allDiscordUsers as any)?.rateLimited) return allDiscordUsers as any;
+
+      let missing: any[] = (Array.from((allDiscordUsers as any).values()) as any[]).filter(
+        (m: any) => !usersWithAddresses.has(m.id) && !m.user.bot,
       );
       if (channelId) {
         const channel = await guild.channels.fetch(channelId);
@@ -528,8 +543,27 @@ export async function handleDashboardButton(
         const channelMembers = (channel as TextChannel).members;
         missing = missing.filter((m) => channelMembers.has(m.id));
       }
-      return missing.map((m) => m.id);
+      return missing.map((m: any) => m.id);
     })();
+
+    if ((missingUserIdsOrRateLimit as any)?.rateLimited) {
+      const retryAfter = (missingUserIdsOrRateLimit as any).retryAfter;
+      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin:missing:start")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await (interaction as ButtonInteraction).update({
+        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+          retryAfter,
+        )}s.`,
+        components: [backRow],
+      });
+      return true;
+    }
+
+    const missingUserIds = missingUserIdsOrRateLimit as string[];
 
     const chainName = ChainsById[chainId]?.name ?? String(chainId);
     const view = {
@@ -604,11 +638,34 @@ export async function handleDashboardButton(
     const guild = interaction.guild;
     assert(guild, "This command can only be used within a guild.");
     const guildId = guild.id;
-    const allDiscordUsers = await guild.members.fetch();
+
+    let allDiscordUsers;
+    try {
+      allDiscordUsers = await guild.members.fetch();
+    } catch (err: any) {
+      const retryAfter = err?.data?.retry_after;
+      if (typeof retryAfter === "number") {
+        const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("dash:admin:missing:start")
+            .setLabel("← Back")
+            .setStyle(ButtonStyle.Secondary),
+        );
+        await (interaction as ButtonInteraction).update({
+          content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+            retryAfter,
+          )}s.`,
+          components: [backRow],
+        });
+        return true;
+      }
+      throw err;
+    }
+
     const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
     const usersWithAddresses = new Set(allAddresses.map((a) => a.userId));
-    let missing = Array.from(allDiscordUsers.values()).filter(
-      (m) => !usersWithAddresses.has(m.id) && !m.user.bot,
+    let missing: any[] = (Array.from((allDiscordUsers as any).values()) as any[]).filter(
+      (m: any) => !usersWithAddresses.has(m.id) && !m.user.bot,
     );
 
     if (roleId) {
@@ -962,20 +1019,31 @@ export async function handleDashboardSelectMenu(
     assert(guild, "This command can only be used within a guild.");
 
     const guildId = guild.id;
-    const allDiscordUsers = await guild.members.fetch();
+
+    let allDiscordUsers;
+    try {
+      allDiscordUsers = await guild.members.fetch();
+    } catch (err: any) {
+      const retryAfter = err?.data?.retry_after;
+      if (typeof retryAfter === "number") {
+        return ["__RATE_LIMIT__", String(retryAfter)];
+      }
+      throw err;
+    }
+
     const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
 
     const usersWithAddresses = new Set(allAddresses.map((addr) => addr.userId));
-    let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
-      (m) => !usersWithAddresses.has(m.id) && !m.user.bot,
+    let usersWithoutAddresses = Array.from((allDiscordUsers as any).values()).filter(
+      (m: any) => !usersWithAddresses.has(m.id) && !m.user.bot,
     );
 
     if (roleId) {
       await guild.roles.fetch();
       const roleMembers = guild.roles.cache.get(roleId)?.members;
       if (roleMembers && roleMembers.size > 0) {
-        const roleMemberIds = new Set(roleMembers.map((m) => m.id));
-        usersWithoutAddresses = usersWithoutAddresses.filter((m) =>
+        const roleMemberIds = new Set(roleMembers.map((m: any) => m.id));
+        usersWithoutAddresses = (usersWithoutAddresses as any[]).filter((m: any) =>
           roleMemberIds.has(m.id),
         );
       } else {
@@ -987,12 +1055,12 @@ export async function handleDashboardSelectMenu(
       const channel = await guild.channels.fetch(channelId);
       assert(channel !== null && channel.isTextBased(), "Must be a text channel");
       const channelMembers = (channel as TextChannel).members;
-      usersWithoutAddresses = usersWithoutAddresses.filter((m) =>
+      usersWithoutAddresses = (usersWithoutAddresses as any[]).filter((m: any) =>
         channelMembers.has(m.id),
       );
     }
 
-    return usersWithoutAddresses.map((m) => m.id);
+    return (usersWithoutAddresses as any[]).map((m: any) => m.id);
   }
 
   function renderMissingWizard(params: {
@@ -1097,6 +1165,23 @@ export async function handleDashboardSelectMenu(
     assert(chainId, "Invalid chain");
 
     const missingUserIds = await computeMissingUsers({ chainId });
+    if (missingUserIds[0] === "__RATE_LIMIT__") {
+      const retryAfter = Number(missingUserIds[1] ?? 0);
+      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin:missing:start")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await (interaction as StringSelectMenuInteraction).update({
+        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+          retryAfter,
+        )}s.`,
+        components: [backRow],
+      });
+      return true;
+    }
+
     const view = renderMissingWizard({ chainId, missingUserIds });
 
     await (interaction as StringSelectMenuInteraction).update(view);
@@ -1111,6 +1196,23 @@ export async function handleDashboardSelectMenu(
 
     const roleId = (interaction as any).values?.[0];
     const missingUserIds = await computeMissingUsers({ chainId, roleId, channelId });
+    if (missingUserIds[0] === "__RATE_LIMIT__") {
+      const retryAfter = Number(missingUserIds[1] ?? 0);
+      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin:missing:start")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await (interaction as any).update({
+        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+          retryAfter,
+        )}s.`,
+        components: [backRow],
+      });
+      return true;
+    }
+
     const view = renderMissingWizard({ chainId, roleId, channelId, missingUserIds });
 
     await (interaction as any).update(view);
@@ -1125,6 +1227,23 @@ export async function handleDashboardSelectMenu(
 
     const channelId = (interaction as any).values?.[0];
     const missingUserIds = await computeMissingUsers({ chainId, roleId, channelId });
+    if (missingUserIds[0] === "__RATE_LIMIT__") {
+      const retryAfter = Number(missingUserIds[1] ?? 0);
+      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin:missing:start")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      );
+      await (interaction as any).update({
+        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+          retryAfter,
+        )}s.`,
+        components: [backRow],
+      });
+      return true;
+    }
+
     const view = renderMissingWizard({ chainId, roleId, channelId, missingUserIds });
 
     await (interaction as any).update(view);

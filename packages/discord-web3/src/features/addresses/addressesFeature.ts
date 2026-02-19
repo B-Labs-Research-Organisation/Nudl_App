@@ -187,12 +187,28 @@ export async function handleAddressesCommands(
 
     const guildId = guild.id;
 
-    const allDiscordUsers = await guild.members.fetch();
+    let allDiscordUsers: any;
+    try {
+      allDiscordUsers = await guild.members.fetch();
+    } catch (err: any) {
+      const retryAfter = err?.data?.retry_after;
+      if (typeof retryAfter === "number") {
+        await interaction.reply({
+          content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+            retryAfter,
+          )}s.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return true;
+      }
+      throw err;
+    }
+
     const allAddresses = await userModel.getUsersByChain(network, guildId);
 
     const usersWithAddresses = new Set(allAddresses.map((addr) => addr.userId));
-    let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
-      (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
+    let usersWithoutAddresses: any[] = (Array.from((allDiscordUsers as any).values()) as any[]).filter(
+      (user: any) => !usersWithAddresses.has(user.id) && !user.user.bot,
     );
 
     if (role) {
@@ -364,12 +380,29 @@ export async function handleAddAddressButton(
     }
 
     const guildId = guild.id;
-    const allDiscordUsers = await guild.members.fetch();
+
+    let allDiscordUsers: any;
+    try {
+      allDiscordUsers = await guild.members.fetch();
+    } catch (err: any) {
+      const retryAfter = err?.data?.retry_after;
+      if (typeof retryAfter === "number") {
+        await interaction.reply({
+          content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
+            retryAfter,
+          )}s.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return true;
+      }
+      throw err;
+    }
+
     const allAddresses = await deps.userModel.getUsersByChain(network, guildId);
 
     const usersWithAddresses = new Set(allAddresses.map((addr) => addr.userId));
-    let usersWithoutAddresses = Array.from(allDiscordUsers.values()).filter(
-      (user) => !usersWithAddresses.has(user.id) && !user.user.bot,
+    let usersWithoutAddresses: any[] = (Array.from((allDiscordUsers as any).values()) as any[]).filter(
+      (user: any) => !usersWithAddresses.has(user.id) && !user.user.bot,
     );
 
     if (roleId) {
