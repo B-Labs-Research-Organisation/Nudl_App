@@ -63,20 +63,39 @@ export async function handleDashboardCommand(
   if (!interaction.isChatInputCommand()) return false;
   if (interaction.commandName !== "nudl") return false;
 
+  const guildId = interaction.guildId;
+  assert(guildId, "This command can only be used within a guild.");
+
+  const userId = interaction.user.id;
+  const addresses = await deps.userModel.getUser(userId, guildId);
+  const addressLines = addresses.length
+    ? addresses
+        .map(({ chainId, address }) => {
+          const chainName = ChainsById[chainId]?.name ?? String(chainId);
+          return `• **${chainName}** (${chainId}) — \`${address}\``;
+        })
+        .join("\n")
+    : "_No addresses set yet._";
+
   const rows = [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId("dash:user")
-        .setLabel("Addresses")
+        .setCustomId("dash:user:add")
+        .setLabel("Add / update")
         .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("dash:user:remove")
+        .setLabel("Remove")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("dash:home")
+        .setLabel("← Back")
+        .setStyle(ButtonStyle.Secondary),
     ),
   ];
 
   await interaction.reply({
-    content:
-      "**nudl**\n\n" +
-      "UI-first dashboard.\n" +
-      "Admins: use `/nudl-admin`.\n",
+    content: `**Addresses**\n\n${addressLines}`,
     components: rows,
     flags: MessageFlags.Ephemeral,
   });
@@ -84,7 +103,7 @@ export async function handleDashboardCommand(
   // Store the message id so modal submits can return to the hub by editing this message.
   try {
     const msg = await interaction.fetchReply();
-    const key = `${interaction.guildId}:${interaction.user.id}`;
+    const key = `${guildId}:${userId}`;
     deps.ui.lastUserAddressesHub[key] = {
       channelId: interaction.channelId,
       messageId: msg.id,
@@ -117,16 +136,24 @@ export async function handleDashboardAdminCommand(
   const rows = [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId("dash:admin")
-        .setLabel("Backoffice")
+        .setCustomId("dash:admin:tokens")
+        .setLabel("Manage tokens")
         .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("dash:admin:safes")
+        .setLabel("Manage safes")
+        .setStyle(ButtonStyle.Primary),
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:admin:payout:start")
+        .setLabel("Start payout")
+        .setStyle(ButtonStyle.Success),
     ),
   ];
 
   await interaction.reply({
-    content:
-      "**nudl admin**\n\n" +
-      "Admin dashboard (WIP): manage tokens/safes, payouts, donation opt-in, and missing-address announcements.",
+    content: "**Admin dashboard**\n\nChoose a category:",
     components: rows,
     flags: MessageFlags.Ephemeral,
   });
