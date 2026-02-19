@@ -30,6 +30,11 @@ export type DashboardDeps = {
       userId: string,
       guildId: string,
     ): Promise<{ chainId: number; address: string }[]>;
+    getAddress(
+      userId: string,
+      guildId: string,
+      chainId: number,
+    ): Promise<string | undefined>;
     deleteAddress(
       userId: string,
       guildId: string,
@@ -203,16 +208,28 @@ export async function handleDashboardButton(
   }
 
   if (interaction.customId === "dash:user:remove") {
+    const guildId = interaction.guildId!;
+    const userId = interaction.user.id;
+
+    const current = await deps.userModel.getUser(userId, guildId);
+    const byChain = new Map(current.map((x) => [x.chainId, x.address] as const));
+
     const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("dash:user:remove:network")
         .setPlaceholder("Select a network to remove...")
         .addOptions(
-          Chains.map((c) => ({
-            label: c.name,
-            value: String(c.chainId),
-            description: c.shortName ? `(${c.shortName})` : undefined,
-          })),
+          Chains.map((c) => {
+            const addr = byChain.get(c.chainId);
+            const short = addr
+              ? `${addr.slice(0, 6)}...${addr.slice(-4)}`
+              : "(none set)";
+            return {
+              label: c.name,
+              value: String(c.chainId),
+              description: short,
+            };
+          }),
         ),
     );
 
@@ -224,7 +241,7 @@ export async function handleDashboardButton(
     );
 
     await (interaction as ButtonInteraction).update({
-      content: "Pick a network to remove:",
+      content: "Pick a network to remove (shows current address):",
       components: [networkRow, backRow],
     });
 
@@ -232,17 +249,29 @@ export async function handleDashboardButton(
   }
 
   if (interaction.customId === "dash:user:add") {
+    const guildId = interaction.guildId!;
+    const userId = interaction.user.id;
+
+    const current = await deps.userModel.getUser(userId, guildId);
+    const byChain = new Map(current.map((x) => [x.chainId, x.address] as const));
+
     // Select a network first (UI replacement for slash command options)
     const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("dash:user:add:network")
         .setPlaceholder("Select a network...")
         .addOptions(
-          Chains.map((c) => ({
-            label: c.name,
-            value: String(c.chainId),
-            description: c.shortName ? `(${c.shortName})` : undefined,
-          })),
+          Chains.map((c) => {
+            const addr = byChain.get(c.chainId);
+            const short = addr
+              ? `${addr.slice(0, 6)}...${addr.slice(-4)}`
+              : "(none set)";
+            return {
+              label: c.name,
+              value: String(c.chainId),
+              description: short,
+            };
+          }),
         ),
     );
 
@@ -254,7 +283,7 @@ export async function handleDashboardButton(
     );
 
     await (interaction as ButtonInteraction).update({
-      content: "Pick a network to add/update:",
+      content: "Pick a network to add/update (shows current address):",
       components: [networkRow, backRow],
     });
 
@@ -662,16 +691,23 @@ export async function handleDashboardSelectMenu(
     const chainId = Number(interaction.values[0]);
     assert(chainId, "Invalid chain");
 
+    const guildId = interaction.guildId!;
+    const userId = interaction.user.id;
+
     const chainName = ChainsById[chainId]?.name ?? String(chainId);
+    const existing = await deps.userModel.getAddress(userId, guildId, chainId);
 
     // Reuse existing modal submit handling by using the legacy customId: addAddress_<chainId>
     const modal = new ModalBuilder()
       .setCustomId(`addAddress_${chainId}`)
-      .setTitle(`Add Address for ${chainName} (${chainId})`);
+      .setTitle(
+        `${existing ? "Update" : "Add"} Address — ${chainName} (${chainId})`,
+      );
 
     const input = new TextInputBuilder()
       .setCustomId("addressInput")
-      .setLabel("Enter your address")
+      .setLabel(existing ? "New address (will ask to confirm override)" : "Address")
+      .setPlaceholder(existing ? existing : "0x…")
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
@@ -687,19 +723,44 @@ export async function handleDashboardSelectMenu(
     const chainId = Number(interaction.values[0]);
     assert(chainId, "Invalid chain");
 
+    const guildId = interaction.guildId!;
+    const userId = interaction.user.id;
+
     const chainName = ChainsById[chainId]?.name ?? String(chainId);
+    const existing = await deps.userModel.getAddress(userId, guildId, chainId);
+
+    if (!existing) {
+      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:user")
+          .setLabel("← Back to Addresses")
+          .setStyle(ButtonStyle.Secondary),
+      );
+
+      await (interaction as StringSelectMenuInteraction).update({
+        content: `No address is set for **${chainName}** (${chainId}).`,
+        components: [backRow],
+      });
+      return true;
+    }
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`dash:user:remove:confirm:${chainId}`)
-        .setLabel(`Remove ${chainName}`)
+        .setLabel(`Yes, remove`) 
         .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("dash:user")
+        .setLabel("Cancel")
+        .setStyle(ButtonStyle.Secondary),
     );
 
-    await (interaction as StringSelectMenuInteraction).reply({
-      content: `Confirm removal for **${chainName}** (${chainId})?`,
+    await (interaction as StringSelectMenuInteraction).update({
+      content:
+        `**Confirm removal** — ${chainName} (${chainId})\n\n` +
+        `Current: \`${existing}\`\n\n` +
+        `Remove this address?`,
       components: [row],
-      flags: MessageFlags.Ephemeral,
     });
 
     return true;
