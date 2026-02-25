@@ -196,18 +196,43 @@ export async function handleDashboardButton(
     return true;
   }
 
-  if (interaction.customId === "dash:user") {
+  if (interaction.customId === "dash:user" || interaction.customId === "dash:user:full") {
     const guildId = interaction.guildId!;
     const userId = interaction.user.id;
 
     const addresses = await deps.userModel.getUser(userId, guildId);
-    const addressLines = addresses.length
-      ? addresses
-          .map(({ chainId, address }) => {
-            const chainName = ChainsById[chainId]?.name ?? String(chainId);
-            return `• **${chainName}** (${chainId}) — \`${address}\``;
-          })
-          .join("\n")
+
+    const showFull = interaction.customId === "dash:user:full";
+
+    const rowsData = [...addresses]
+      .sort((a, b) => a.chainId - b.chainId)
+      .map(({ chainId, address }) => {
+        const chainName = ChainsById[chainId]?.name ?? String(chainId);
+        const chainLabel = `${chainName} (${chainId})`;
+        const addrLabel = showFull
+          ? address
+          : `${address.slice(0, 6)}…${address.slice(-4)}`;
+        return { chainLabel, addrLabel };
+      });
+
+    const chainColWidth = Math.min(
+      28,
+      Math.max("CHAIN".length, ...rowsData.map((r) => r.chainLabel.length)),
+    );
+
+    const addressLines = rowsData.length
+      ? "```\\n" +
+        "CHAIN".padEnd(chainColWidth) +
+        "  " +
+        "ADDRESS\\n" +
+        rowsData
+          .map((r) =>
+            r.chainLabel.slice(0, chainColWidth).padEnd(chainColWidth) +
+            "  " +
+            r.addrLabel,
+          )
+          .join("\\n") +
+        "\\n```"
       : "_No addresses set yet._";
 
     const rows = [
@@ -220,6 +245,10 @@ export async function handleDashboardButton(
           .setCustomId("dash:user:remove")
           .setLabel("Remove")
           .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(showFull ? "dash:user" : "dash:user:full")
+          .setLabel(showFull ? "Hide full" : "Show full")
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId("dash:home")
           .setLabel("← Back")
@@ -241,7 +270,6 @@ export async function handleDashboardButton(
 
     return true;
   }
-
   if (interaction.customId === "dash:user:remove") {
     const guildId = interaction.guildId!;
     const userId = interaction.user.id;
@@ -498,249 +526,12 @@ export async function handleDashboardButton(
     await (interaction as ButtonInteraction).update({
       content:
         "**Notify missing addresses**\n\n" +
-        "Step 1: pick a network. Then optionally filter by role/channel.\n" +
+        "Step 1: pick a network. Then optionally filter by role.\n" +
+        "This tool automatically filters to members who can see *this channel*.\n" +
         "When you click **Send notification**, I’ll post a message in *this channel* tagging missing users.",
       components: [chainRow, backRow],
     });
 
-    return true;
-  }
-
-  if (interaction.customId.startsWith("dash:admin:missing:clear-role:chain:")) {
-    const parts = interaction.customId.split(":");
-    const chainId = Number(parts[5]);
-    const channelId = parts[7] !== "none" ? parts[7] : null;
-    assert(chainId, "Invalid chain");
-
-    const missingUserIdsOrRateLimit = await (async () => {
-      const guild = interaction.guild;
-      assert(guild, "This command can only be used within a guild.");
-      const guildId = guild.id;
-      let allDiscordUsers: any;
-      try {
-        allDiscordUsers = await guild.members.fetch();
-      } catch (err: any) {
-        const retryAfter = err?.data?.retry_after;
-        if (typeof retryAfter === "number") {
-          // Gateway rate limit: ask the admin to retry shortly instead of crashing the process.
-          return {
-            rateLimited: true as const,
-            retryAfter,
-          };
-        }
-        throw err;
-      }
-      const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
-      const usersWithAddresses = new Set(allAddresses.map((a) => a.userId));
-      if ((allDiscordUsers as any)?.rateLimited) return allDiscordUsers as any;
-
-      let missing: any[] = (Array.from((allDiscordUsers as any).values()) as any[]).filter(
-        (m: any) => !usersWithAddresses.has(m.id) && !m.user.bot,
-      );
-      if (channelId) {
-        const channel = await guild.channels.fetch(channelId);
-        assert(channel !== null && channel.isTextBased(), "Must be a text channel");
-        const channelMembers = (channel as TextChannel).members;
-        missing = missing.filter((m) => channelMembers.has(m.id));
-      }
-      return missing.map((m: any) => m.id);
-    })();
-
-    if ((missingUserIdsOrRateLimit as any)?.rateLimited) {
-      const retryAfter = (missingUserIdsOrRateLimit as any).retryAfter;
-      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId("dash:admin:missing:start")
-          .setLabel("← Back")
-          .setStyle(ButtonStyle.Secondary),
-      );
-      await (interaction as ButtonInteraction).update({
-        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
-          retryAfter,
-        )}s.`,
-        components: [backRow],
-      });
-      return true;
-    }
-
-    const missingUserIds = missingUserIdsOrRateLimit as string[];
-
-    const chainName = ChainsById[chainId]?.name ?? String(chainId);
-    const view = {
-      content:
-        `**Notify missing addresses** — ${chainName} (${chainId})\n\n` +
-        `Filters:\n• Role: (none)\n• Channel visibility: ${
-          channelId ? `<#${channelId}>` : "(none)"
-        }\n\n` +
-        `Missing: **${missingUserIds.length}** users\n` +
-        (missingUserIds.length
-          ? `Preview: ${missingUserIds.slice(0, 10).map((id) => `<@${id}>`).join(" ")}`
-          : "Preview: (none)"),
-      components: ((): any[] => {
-        const roleRow = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
-          new RoleSelectMenuBuilder()
-            .setCustomId(
-              `dash:admin:missing:role:chain:${chainId}:channel:${channelId ?? "none"}`,
-            )
-            .setPlaceholder("Optional: filter by role…")
-            .setMinValues(1)
-            .setMaxValues(1),
-        );
-        const channelRow = new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
-          new ChannelSelectMenuBuilder()
-            .setCustomId(`dash:admin:missing:channel:chain:${chainId}:role:none`)
-            .setPlaceholder("Optional: filter by channel visibility…")
-            .setMinValues(1)
-            .setMaxValues(1),
-        );
-        const clearRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(
-              `dash:admin:missing:clear-role:chain:${chainId}:channel:${channelId ?? "none"}`,
-            )
-            .setLabel("Clear role")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId(`dash:admin:missing:clear-channel:chain:${chainId}:role:none`)
-            .setLabel("Clear channel")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(!channelId),
-        );
-        const sendRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(
-              `notifyMissing_chain:${chainId}_role:none_channel:${channelId ?? "none"}`,
-            )
-            .setLabel("Send notification")
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(missingUserIds.length === 0),
-          new ButtonBuilder()
-            .setCustomId("dash:admin")
-            .setLabel("← Back to Backoffice")
-            .setStyle(ButtonStyle.Secondary),
-        );
-        return [roleRow, channelRow, clearRow, sendRow];
-      })(),
-    };
-
-    await (interaction as ButtonInteraction).update(view);
-    return true;
-  }
-
-  if (interaction.customId.startsWith("dash:admin:missing:clear-channel:chain:")) {
-    const parts = interaction.customId.split(":");
-    const chainId = Number(parts[5]);
-    const roleId = parts[7] !== "none" ? parts[7] : null;
-    assert(chainId, "Invalid chain");
-
-    // reuse the select-menu renderer by faking a recompute with channel cleared
-    const guild = interaction.guild;
-    assert(guild, "This command can only be used within a guild.");
-    const guildId = guild.id;
-
-    let allDiscordUsers;
-    try {
-      allDiscordUsers = await guild.members.fetch();
-    } catch (err: any) {
-      const retryAfter = err?.data?.retry_after;
-      if (typeof retryAfter === "number") {
-        const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("dash:admin:missing:start")
-            .setLabel("← Back")
-            .setStyle(ButtonStyle.Secondary),
-        );
-        await (interaction as ButtonInteraction).update({
-          content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
-            retryAfter,
-          )}s.`,
-          components: [backRow],
-        });
-        return true;
-      }
-      throw err;
-    }
-
-    const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
-    const usersWithAddresses = new Set(allAddresses.map((a) => a.userId));
-    let missing: any[] = (Array.from((allDiscordUsers as any).values()) as any[]).filter(
-      (m: any) => !usersWithAddresses.has(m.id) && !m.user.bot,
-    );
-
-    if (roleId) {
-      await guild.roles.fetch();
-      const roleMembers = guild.roles.cache.get(roleId)?.members;
-      if (roleMembers && roleMembers.size > 0) {
-        const roleMemberIds = new Set(roleMembers.map((m) => m.id));
-        missing = missing.filter((m) => roleMemberIds.has(m.id));
-      } else {
-        missing = [];
-      }
-    }
-
-    const chainName = ChainsById[chainId]?.name ?? String(chainId);
-    const missingUserIds = missing.map((m) => m.id);
-
-    const view = {
-      content:
-        `**Notify missing addresses** — ${chainName} (${chainId})\n\n` +
-        `Filters:\n• Role: ${roleId ? `<@&${roleId}>` : "(none)"}\n• Channel visibility: (none)\n\n` +
-        `Missing: **${missingUserIds.length}** users\n` +
-        (missingUserIds.length
-          ? `Preview: ${missingUserIds.slice(0, 10).map((id) => `<@${id}>`).join(" ")}`
-          : "Preview: (none)"),
-      components: ((): any[] => {
-        const roleRow = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
-          new RoleSelectMenuBuilder()
-            .setCustomId(
-              `dash:admin:missing:role:chain:${chainId}:channel:none`,
-            )
-            .setPlaceholder("Optional: filter by role…")
-            .setMinValues(1)
-            .setMaxValues(1),
-        );
-        const channelRow = new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
-          new ChannelSelectMenuBuilder()
-            .setCustomId(
-              `dash:admin:missing:channel:chain:${chainId}:role:${roleId ?? "none"}`,
-            )
-            .setPlaceholder("Optional: filter by channel visibility…")
-            .setMinValues(1)
-            .setMaxValues(1),
-        );
-        const clearRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`dash:admin:missing:clear-role:chain:${chainId}:channel:none`)
-            .setLabel("Clear role")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(!roleId),
-          new ButtonBuilder()
-            .setCustomId(
-              `dash:admin:missing:clear-channel:chain:${chainId}:role:${roleId ?? "none"}`,
-            )
-            .setLabel("Clear channel")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-        );
-        const sendRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(
-              `notifyMissing_chain:${chainId}_role:${roleId ?? "none"}_channel:none`,
-            )
-            .setLabel("Send notification")
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(missingUserIds.length === 0),
-          new ButtonBuilder()
-            .setCustomId("dash:admin")
-            .setLabel("← Back to Backoffice")
-            .setStyle(ButtonStyle.Secondary),
-        );
-        return [roleRow, channelRow, clearRow, sendRow];
-      })(),
-    };
-
-    await (interaction as ButtonInteraction).update(view);
     return true;
   }
 
@@ -1011,65 +802,50 @@ export async function handleDashboardSelectMenu(
   async function computeMissingUsers(params: {
     chainId: number;
     roleId?: string | null;
-    channelId?: string | null;
   }): Promise<string[]> {
-    const { chainId, roleId, channelId } = params;
+    const { chainId, roleId } = params;
 
     const guild = interaction.guild;
     assert(guild, "This command can only be used within a guild.");
 
     const guildId = guild.id;
 
-    let allDiscordUsers;
-    try {
-      allDiscordUsers = await guild.members.fetch();
-    } catch (err: any) {
-      const retryAfter = err?.data?.retry_after;
-      if (typeof retryAfter === "number") {
-        return ["__RATE_LIMIT__", String(retryAfter)];
-      }
-      throw err;
-    }
+    // Filter baseline is: members who can see *this* channel.
+    const channel = interaction.channel;
+    assert(channel && channel.isTextBased(), "Must be a text channel");
 
-    const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
+    // TextChannel.members is the set of members with visibility.
+    const visibleMembers = (channel as TextChannel).members;
+    let candidateIds = Array.from(visibleMembers.keys());
 
-    const usersWithAddresses = new Set(allAddresses.map((addr) => addr.userId));
-    let usersWithoutAddresses = Array.from((allDiscordUsers as any).values()).filter(
-      (m: any) => !usersWithAddresses.has(m.id) && !m.user.bot,
-    );
+    // Remove bots
+    candidateIds = candidateIds.filter((id) => {
+      const m = visibleMembers.get(id);
+      return m ? !m.user.bot : false;
+    });
 
+    // Apply role filter if present
     if (roleId) {
       await guild.roles.fetch();
       const roleMembers = guild.roles.cache.get(roleId)?.members;
-      if (roleMembers && roleMembers.size > 0) {
-        const roleMemberIds = new Set(roleMembers.map((m: any) => m.id));
-        usersWithoutAddresses = (usersWithoutAddresses as any[]).filter((m: any) =>
-          roleMemberIds.has(m.id),
-        );
-      } else {
-        usersWithoutAddresses = [];
-      }
+      if (!roleMembers || roleMembers.size === 0) return [];
+      const roleMemberIds = new Set(roleMembers.map((m: any) => m.id));
+      candidateIds = candidateIds.filter((id) => roleMemberIds.has(id));
     }
 
-    if (channelId) {
-      const channel = await guild.channels.fetch(channelId);
-      assert(channel !== null && channel.isTextBased(), "Must be a text channel");
-      const channelMembers = (channel as TextChannel).members;
-      usersWithoutAddresses = (usersWithoutAddresses as any[]).filter((m: any) =>
-        channelMembers.has(m.id),
-      );
-    }
+    // Subtract users who already have addresses
+    const allAddresses = await deps.userModel.getUsersByChain(chainId, guildId);
+    const usersWithAddresses = new Set(allAddresses.map((addr) => addr.userId));
 
-    return (usersWithoutAddresses as any[]).map((m: any) => m.id);
+    return candidateIds.filter((id) => !usersWithAddresses.has(id));
   }
 
   function renderMissingWizard(params: {
     chainId: number;
     roleId?: string | null;
-    channelId?: string | null;
     missingUserIds: string[];
   }) {
-    const { chainId, roleId, channelId, missingUserIds } = params;
+    const { chainId, roleId, missingUserIds } = params;
     const chainName = ChainsById[chainId]?.name ?? String(chainId);
 
     const previewMentions = missingUserIds
@@ -1078,13 +854,11 @@ export async function handleDashboardSelectMenu(
       .join(" ");
 
     const roleLabel = roleId ? `<@&${roleId}>` : "(none)";
-    const channelLabel = channelId ? `<#${channelId}>` : "(none)";
 
     const content =
       `**Notify missing addresses** — ${chainName} (${chainId})\n\n` +
-      `Filters:\n` +
-      `• Role: ${roleLabel}\n` +
-      `• Channel visibility: ${channelLabel}\n\n` +
+      `Channel: <#${interaction.channelId}> (auto-filtered by visibility)\n` +
+      `Role filter: ${roleLabel}\n\n` +
       `Missing: **${missingUserIds.length}** users\n` +
       (previewMentions ? `Preview: ${previewMentions}` : "Preview: (none)");
 
@@ -1093,11 +867,7 @@ export async function handleDashboardSelectMenu(
     rows.push(
       new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
         new RoleSelectMenuBuilder()
-          .setCustomId(
-            `dash:admin:missing:role:chain:${chainId}:channel:${
-              channelId ?? "none"
-            }`,
-          )
+          .setCustomId(`dash:admin:missing:role:chain:${chainId}`)
           .setPlaceholder("Optional: filter by role…")
           .setMinValues(1)
           .setMaxValues(1),
@@ -1105,47 +875,10 @@ export async function handleDashboardSelectMenu(
     );
 
     rows.push(
-      new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
-        new ChannelSelectMenuBuilder()
-          .setCustomId(
-            `dash:admin:missing:channel:chain:${chainId}:role:${roleId ?? "none"}`,
-          )
-          .setPlaceholder("Optional: filter by channel visibility…")
-          .setMinValues(1)
-          .setMaxValues(1),
-      ),
-    );
-
-    rows.push(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(
-            `dash:admin:missing:clear-role:chain:${chainId}:channel:${
-              channelId ?? "none"
-            }`,
-          )
-          .setLabel("Clear role")
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(!roleId),
-        new ButtonBuilder()
-          .setCustomId(
-            `dash:admin:missing:clear-channel:chain:${chainId}:role:${
-              roleId ?? "none"
-            }`,
-          )
-          .setLabel("Clear channel")
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(!channelId),
-      ),
-    );
-
-    rows.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(
-            `notifyMissing_chain:${chainId}_role:${roleId ?? "none"}_channel:${
-              channelId ?? "none"
-            }`,
+            `notifyMissing_chain:${chainId}_role:${roleId ?? "none"}_channel:${interaction.channelId}`,
           )
           .setLabel("Send notification")
           .setStyle(ButtonStyle.Primary)
@@ -1191,60 +924,12 @@ export async function handleDashboardSelectMenu(
   if (interaction.customId.startsWith("dash:admin:missing:role:chain:")) {
     const parts = interaction.customId.split(":");
     const chainId = Number(parts[5]);
-    const channelId = parts[7] !== "none" ? parts[7] : null;
     assert(chainId, "Invalid chain");
 
     const roleId = (interaction as any).values?.[0];
-    const missingUserIds = await computeMissingUsers({ chainId, roleId, channelId });
-    if (missingUserIds[0] === "__RATE_LIMIT__") {
-      const retryAfter = Number(missingUserIds[1] ?? 0);
-      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId("dash:admin:missing:start")
-          .setLabel("← Back")
-          .setStyle(ButtonStyle.Secondary),
-      );
-      await (interaction as any).update({
-        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
-          retryAfter,
-        )}s.`,
-        components: [backRow],
-      });
-      return true;
-    }
+    const missingUserIds = await computeMissingUsers({ chainId, roleId });
 
-    const view = renderMissingWizard({ chainId, roleId, channelId, missingUserIds });
-
-    await (interaction as any).update(view);
-    return true;
-  }
-
-  if (interaction.customId.startsWith("dash:admin:missing:channel:chain:")) {
-    const parts = interaction.customId.split(":");
-    const chainId = Number(parts[5]);
-    const roleId = parts[7] !== "none" ? parts[7] : null;
-    assert(chainId, "Invalid chain");
-
-    const channelId = (interaction as any).values?.[0];
-    const missingUserIds = await computeMissingUsers({ chainId, roleId, channelId });
-    if (missingUserIds[0] === "__RATE_LIMIT__") {
-      const retryAfter = Number(missingUserIds[1] ?? 0);
-      const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId("dash:admin:missing:start")
-          .setLabel("← Back")
-          .setStyle(ButtonStyle.Secondary),
-      );
-      await (interaction as any).update({
-        content: `Discord gateway rate limit hit while fetching members. Try again in ~${Math.ceil(
-          retryAfter,
-        )}s.`,
-        components: [backRow],
-      });
-      return true;
-    }
-
-    const view = renderMissingWizard({ chainId, roleId, channelId, missingUserIds });
+    const view = renderMissingWizard({ chainId, roleId, missingUserIds });
 
     await (interaction as any).update(view);
     return true;
@@ -1347,6 +1032,7 @@ export async function handleDashboardSelectMenu(
       chainId,
       list: [],
       csvData: "",
+      donateAmount: 0,
     };
 
     const chainName = ChainsById[chainId]?.name ?? String(chainId);

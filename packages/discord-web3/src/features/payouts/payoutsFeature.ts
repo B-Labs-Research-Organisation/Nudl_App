@@ -104,6 +104,73 @@ export async function handlePayoutsModalSubmit(
     return true;
   }
 
+  if (interaction.customId.startsWith("payoutDonateModal_")) {
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout session, try again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const raw = interaction.fields.getTextInputValue("donationAmount");
+    const donateAmount = Number(raw);
+    if (!Number.isFinite(donateAmount) || donateAmount < 0) {
+      await interaction.reply({
+        content: "Donation amount must be a number ≥ 0.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    payout.donateAmount = donateAmount;
+
+    const chainId = Number(payout.chainId);
+    const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+    // Show next-step buttons again
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`payoutDonateModal_${payoutId}`)
+        .setLabel("Donation (optional)")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    if (payout.type === "disperse") {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dispersePayoutButton_${payoutId}`)
+          .setLabel(`Generate Disperse file (${chainName})`)
+          .setStyle(ButtonStyle.Primary),
+      );
+    } else if (payout.type === "safe") {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`safePayoutButton_${payoutId}`)
+          .setLabel(`Continue Safe setup (${chainName})`)
+          .setStyle(ButtonStyle.Success),
+      );
+    } else if (payout.type === "csv-airdrop") {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`setTokenButton_${payoutId}`)
+          .setLabel(`Select token (${chainName})`)
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+
+    await interaction.reply({
+      content:
+        `✅ Donation updated: **${donateAmount.toFixed(4)}** (adds an extra line item; total spend increases).`,
+      components: [row],
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
   if (interaction.customId.startsWith("payoutModal_")) {
     const [_, payoutId] = interaction.customId.split("_");
     const payout = payouts[payoutId];
@@ -127,15 +194,24 @@ export async function handlePayoutsModalSubmit(
       if (payout.type === "disperse") {
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
+            .setCustomId(`payoutDonateModal_${payoutId}`)
+            .setLabel("Donation (optional)")
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
             .setCustomId(`dispersePayoutButton_${payoutId}`)
             .setLabel(`Generate Disperse file (${chainName})`)
             .setStyle(ButtonStyle.Primary),
         );
 
+        const donateLine = payout.donateAmount
+          ? `\nDonation: **${Number(payout.donateAmount).toFixed(4)}** (adds an extra line item)`
+          : "\nDonation: **0**";
+
         await interaction.reply({
           content:
-            `✅ CSV captured for **Disperse** on **${chainName}**.\n` +
-            `Click below to generate the file.`,
+            `✅ CSV captured for **Disperse** on **${chainName}**.` +
+            donateLine +
+            `\nClick below to generate the file.`,
           components: [row],
           flags: MessageFlags.Ephemeral,
         });
@@ -146,15 +222,24 @@ export async function handlePayoutsModalSubmit(
       if (payout.type === "safe") {
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
+            .setCustomId(`payoutDonateModal_${payoutId}`)
+            .setLabel("Donation (optional)")
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
             .setCustomId(`safePayoutButton_${payoutId}`)
             .setLabel(`Continue Safe setup (${chainName})`)
             .setStyle(ButtonStyle.Success),
         );
 
+        const donateLine = payout.donateAmount
+          ? `\nDonation: **${Number(payout.donateAmount).toFixed(4)}** (adds an extra line item)`
+          : "\nDonation: **0**";
+
         await interaction.reply({
           content:
-            `✅ CSV captured for **Safe** on **${chainName}**.\n` +
-            `Next: pick Safe + Token (we’ll autofill if possible).`,
+            `✅ CSV captured for **Safe** on **${chainName}**.` +
+            donateLine +
+            `\nNext: pick Safe + Token (we’ll autofill if possible).`,
           components: [row],
           flags: MessageFlags.Ephemeral,
         });
@@ -165,15 +250,24 @@ export async function handlePayoutsModalSubmit(
       if (payout.type === "csv-airdrop") {
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
+            .setCustomId(`payoutDonateModal_${payoutId}`)
+            .setLabel("Donation (optional)")
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
             .setCustomId(`setTokenButton_${payoutId}`)
             .setLabel(`Select token (${chainName})`)
             .setStyle(ButtonStyle.Secondary),
         );
 
+        const donateLine = payout.donateAmount
+          ? `\nDonation: **${Number(payout.donateAmount).toFixed(4)}** (adds an extra line item)`
+          : "\nDonation: **0**";
+
         await interaction.reply({
           content:
-            `✅ CSV captured for **CSV Airdrop** on **${chainName}**.\n` +
-            `Next: select token (Safe CSV Airdrop needs token_address per row).`,
+            `✅ CSV captured for **CSV Airdrop** on **${chainName}**.` +
+            donateLine +
+            `\nNext: select token (Safe CSV Airdrop needs token_address per row).`,
           components: [row],
           flags: MessageFlags.Ephemeral,
         });
@@ -589,6 +683,40 @@ export async function handlePayoutsButton(
   const { client, userModel, tokenModel, safeModel, stores } = deps;
   const { payouts } = stores;
 
+  // Donation modal opener
+  if (interaction.customId.startsWith("payoutDonateModal_")) {
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout session, try again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const chainId = Number(payout.chainId);
+    const chainName = ChainsById[chainId]?.name ?? String(chainId);
+
+    const modal = new ModalBuilder()
+      .setCustomId(`payoutDonateModal_${payoutId}`)
+      .setTitle(`Donation (optional) — ${chainName}`);
+
+    const input = new TextInputBuilder()
+      .setCustomId("donationAmount")
+      .setLabel("Donation amount (0 to skip)")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setValue(String(payout.donateAmount ?? 0));
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+    );
+
+    await (interaction as ButtonInteraction).showModal(modal);
+    return true;
+  }
+
   // Safe payout generation once setup is complete
   if (interaction.customId.startsWith("safePayoutGenerate_")) {
     assert(tokenModel, "tokenModel required");
@@ -631,6 +759,17 @@ export async function handlePayoutsButton(
         chainId: payout.chainId,
       });
 
+    if (
+      process.env.DONATE_ADDRESS &&
+      viem.isAddress(process.env.DONATE_ADDRESS) &&
+      Number(payout.donateAmount ?? 0) > 0
+    ) {
+      addressEntries.push([
+        process.env.DONATE_ADDRESS,
+        String(payout.donateAmount),
+      ]);
+    }
+
     const batchResult = generateSafeTransactionBatch({
       entries: addressEntries,
       chainId: payout.chainId,
@@ -658,6 +797,9 @@ export async function handlePayoutsButton(
     const tokenSymbol = token.symbol ?? "Unknown Token Symbol";
 
     let content = `✅ SAFE JSON file generated for ${addressEntries.length} entries on ${chainName} using ${tokenName} (${tokenSymbol}).`;
+    if (Number(payout.donateAmount ?? 0) > 0) {
+      content += `\nYou are donating ${Number(payout.donateAmount).toFixed(4)} ${tokenSymbol}, thank you! ❤️`;
+    }
     content += `\n💸 ___Total amount to transfer___: **${batchResult.totalAmountFormatted} ${tokenSymbol}**`;
 
     if (allErrors.length > 0) {
@@ -836,7 +978,7 @@ export async function handlePayoutsButton(
     const { file, description } = dispersePayout({
       addressEntries,
       chainId,
-      donateAmount: 0,
+      donateAmount: Number(payout.donateAmount ?? 0),
       donateAddress: process.env.DONATE_ADDRESS,
       errors,
     });
@@ -886,8 +1028,20 @@ export async function handlePayoutsButton(
         chainId,
       });
 
+    const entries = [...addressEntries];
+    if (
+      process.env.DONATE_ADDRESS &&
+      viem.isAddress(process.env.DONATE_ADDRESS) &&
+      Number(payout.donateAmount ?? 0) > 0
+    ) {
+      entries.push([
+        process.env.DONATE_ADDRESS,
+        String(payout.donateAmount),
+      ]);
+    }
+
     const header = "token_address,receiver,amount";
-    const lines = addressEntries.map(
+    const lines = entries.map(
       ([receiver, amount]) => `${tokenAddress},${receiver},${amount}`,
     );
 
@@ -895,8 +1049,13 @@ export async function handlePayoutsButton(
 
     const chainName = ChainsById[Number(chainId)]?.name ?? String(chainId);
 
+    const donationLine =
+      Number(payout.donateAmount ?? 0) > 0
+        ? `\nYou are donating ${Number(payout.donateAmount).toFixed(4)} (adds an extra line item), thank you! ❤️`
+        : "";
+
     const contentLines = [
-      `✅ CSV Airdrop file generated for **${chainName}**.`,
+      `✅ CSV Airdrop file generated for **${chainName}**.${donationLine}`,
       errors.length ? `\n⚠️ Issues found:\n\`\`\`\n${errors.join("\n")}\n\`\`\`` : "",
     ].filter(Boolean);
 
