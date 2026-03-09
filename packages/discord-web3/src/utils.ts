@@ -837,13 +837,26 @@ export function getAdminManageTokensDisplay({
     );
 
     if (tokensOnChain.length > 0) {
-      const tokensList = tokensOnChain
-        .map(
-          (token) =>
-            `\`${token.symbol}\` (\`${token.address.slice(0, 6)}...${token.address.slice(-4)}\`)` +
-            `${token.name ? ` — ${token.name}` : ""}`
-        )
-        .join('\n');
+      const sorted = [...tokensOnChain].sort((a, b) =>
+        (a.symbol || "").localeCompare(b.symbol || ""),
+      );
+
+      const symbolCol = Math.min(
+        12,
+        Math.max(3, ...sorted.map((t) => (t.symbol || "?").length)),
+      );
+
+      const tokensList =
+        "```\n" +
+        sorted
+          .map((token) => {
+            const symbol = (token.symbol || "?").padEnd(symbolCol);
+            const name = token.name ? `  ${token.name}` : "";
+            return `${symbol}  ${token.address}${name}`;
+          })
+          .join("\n") +
+        "\n```";
+
       return `**${chain.name}**:\n${tokensList}`;
     } else {
       return `**${chain.name}**: _No tokens added_`;
