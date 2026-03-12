@@ -833,6 +833,8 @@ export async function handleDashboardModalSubmit(
 
   const rawAddress = interaction.fields.getTextInputValue("addressInput").trim();
   const normalizedAddress = rawAddress.toLowerCase();
+
+  // Important: search is scoped to the current guild only.
   const usersWithAddress = await deps.userModel.getUsersByAddress(
     guildId,
     normalizedAddress,
@@ -862,7 +864,14 @@ export async function handleDashboardModalSubmit(
       mention = `<@${member.id}>`;
       label = member.displayName || member.user.username || member.id;
     } catch {
-      // keep fallback values
+      // Fallback for users not currently in guild member cache/list.
+      try {
+        const user = await interaction.client.users.fetch(userId);
+        mention = `<@${user.id}>`;
+        label = user.username || user.id;
+      } catch {
+        label = `Unknown user (${userId})`;
+      }
     }
 
     const chains = entries
