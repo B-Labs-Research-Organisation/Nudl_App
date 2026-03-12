@@ -74,6 +74,62 @@ export type PayoutsFeatureDeps = {
   };
 };
 
+async function buildPayoutConfigSummary(
+  interaction: Interaction,
+  payout: any,
+  opts?: { recipientCount?: number; tokenSymbol?: string; tokenName?: string },
+): Promise<string> {
+  const chainId = Number(payout?.chainId);
+  const chainName = ChainsById[chainId]?.name ?? String(chainId);
+  const mode = payout?.recipientsMode ?? "manual";
+
+  let roleLabel = "(none)";
+  let channelLabel = "(none)";
+
+  const guild = interaction.guild;
+  if (guild) {
+    if (payout?.roleId) {
+      try {
+        await guild.roles.fetch();
+        const role = guild.roles.cache.get(payout.roleId);
+        roleLabel = role ? `${role.name} (${role.id})` : `${payout.roleId}`;
+      } catch {
+        roleLabel = `${payout.roleId}`;
+      }
+    }
+
+    if (payout?.channelId) {
+      try {
+        const ch = await guild.channels.fetch(payout.channelId);
+        const chName = (ch as any)?.name;
+        channelLabel = chName ? `#${chName} (${payout.channelId})` : `${payout.channelId}`;
+      } catch {
+        channelLabel = `${payout.channelId}`;
+      }
+    }
+  }
+
+  const tokenLine = payout?.tokenAddress
+    ? `• Token: ${opts?.tokenName || "(unknown)"}${opts?.tokenSymbol ? ` (${opts.tokenSymbol})` : ""} — \`${payout.tokenAddress}\``
+    : null;
+
+  return [
+    "\n📋 **Payout configuration**",
+    `• Session: \`${payout?.id ?? "(n/a)"}\``,
+    `• Platform: ${payout?.type ?? "(unknown)"}`,
+    `• Chain: ${chainName} (${chainId})`,
+    tokenLine,
+    payout?.safeAddress ? `• Safe: \`${payout.safeAddress}\`` : null,
+    `• Recipients source: ${mode}`,
+    `• Role filter: ${roleLabel}`,
+    `• Channel filter: ${channelLabel}`,
+    `• Parsed recipients: ${opts?.recipientCount ?? 0}`,
+    payout?.donateAmount ? `• Donation: ${Number(payout.donateAmount)}${opts?.tokenSymbol ? ` ${opts.tokenSymbol}` : ""}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
  * Handles payout-related modal submits.
  *
@@ -820,6 +876,12 @@ export async function handlePayoutsButton(
       content += `\n\n⚠️ Some issues were found:\n\`\`\`\n${allErrors.join("\n")}\n\`\`\``;
     }
 
+    content += await buildPayoutConfigSummary(interaction, payout, {
+      recipientCount: addressEntries.length,
+      tokenName,
+      tokenSymbol,
+    });
+
     await (interaction as ButtonInteraction).editReply({
       content,
       files,
@@ -997,8 +1059,12 @@ export async function handlePayoutsButton(
       errors,
     });
 
+    const summary = await buildPayoutConfigSummary(interaction, payout, {
+      recipientCount: addressEntries.length,
+    });
+
     await interaction.reply({
-      content: description,
+      content: `${description}${summary}`,
       files: [file],
       flags: MessageFlags.Ephemeral,
     });
@@ -1068,9 +1134,24 @@ export async function handlePayoutsButton(
         ? `\nYou are donating ${Number(payout.donateAmount).toFixed(4)} (adds an extra line item), thank you! ❤️`
         : "";
 
+    let tokenName: string | undefined;
+    let tokenSymbol: string | undefined;
+    if (tokenModel) {
+      const token = await tokenModel.getToken(guildId, chainId, tokenAddress);
+      tokenName = token?.name;
+      tokenSymbol = token?.symbol;
+    }
+
+    const summary = await buildPayoutConfigSummary(interaction, payout, {
+      recipientCount: entries.length,
+      tokenName,
+      tokenSymbol,
+    });
+
     const contentLines = [
       `✅ CSV Airdrop file generated for **${chainName}**.${donationLine}`,
       errors.length ? `\n⚠️ Issues found:\n\`\`\`\n${errors.join("\n")}\n\`\`\`` : "",
+      summary,
     ].filter(Boolean);
 
     await interaction.reply({
