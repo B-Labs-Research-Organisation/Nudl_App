@@ -328,9 +328,23 @@ export async function handlePayoutsModalSubmit(
     const userIdToUser: Record<string, User> = {};
 
     for (let i = 0; i < lines.length; i++) {
-      const [idRaw, amountRaw] = lines[i]
-        .split(/[\t,= ]/)
-        .map((s) => s.trim());
+      const line = lines[i];
+      let idRaw = "";
+      let amountRaw = "";
+
+      const delimited = /^(.*)[\t,=]\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*$/i.exec(
+        line,
+      );
+      if (delimited) {
+        idRaw = delimited[1]?.trim() ?? "";
+        amountRaw = delimited[2]?.trim() ?? "";
+      } else {
+        const parts = line.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+        if (parts.length === 2) {
+          idRaw = parts[0] ?? "";
+          amountRaw = parts[1] ?? "";
+        }
+      }
 
       if (!idRaw || !amountRaw) {
         errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);

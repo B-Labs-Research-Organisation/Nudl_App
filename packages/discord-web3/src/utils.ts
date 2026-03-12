@@ -588,13 +588,32 @@ export async function parseRecipientsCsvAndResolveAddresses({
 
   // 1. Resolve Discord users
   for (let i = 0; i < lines.length; i++) {
-    const [idRaw, amountRaw] = lines[i]
-      .split(/[\t,= ]/)
-      .map((s) => s.trim());
+    const line = lines[i];
+    let idRaw = "";
+    let amountRaw = "";
+
+    // Preferred: delimiter-based parsing (comma, tab, equals), preserving spaces in identifiers.
+    // This supports values like: "Display Name (@unique_name),0"
+    const delimited = /^(.*)[\t,=]\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*$/i.exec(
+      line,
+    );
+    if (delimited) {
+      idRaw = delimited[1]?.trim() ?? "";
+      amountRaw = delimited[2]?.trim() ?? "";
+    } else {
+      // Legacy fallback: exactly two whitespace-separated tokens (e.g. "123456789 1.5").
+      const parts = line.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+      if (parts.length === 2) {
+        idRaw = parts[0] ?? "";
+        amountRaw = parts[1] ?? "";
+      }
+    }
+
     if (!idRaw || !amountRaw) {
       errors.push(`Line ${i + 1}: Invalid format (expected id,amount)`);
       continue;
     }
+
     try {
       const user = await resolveDiscordUser(client, idRaw, guildId);
       if (!user) {
