@@ -16,6 +16,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import assert from "assert";
+import * as viem from "viem";
 
 import {
   Chains,
@@ -43,6 +44,12 @@ export type DashboardDeps = {
       guildId: string,
       address: string,
     ): Promise<{ userId: string; chainId: number; address: string }[]>;
+    setAddress(
+      userId: string,
+      guildId: string,
+      chainId: number,
+      address: string,
+    ): Promise<void>;
     deleteAddress(
       userId: string,
       guildId: string,
@@ -346,7 +353,11 @@ export async function handleDashboardButton(
         ),
     );
 
-    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    const actionsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("dash:user:add:all")
+        .setLabel("Set same address on all networks")
+        .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId("dash:user")
         .setLabel("← Back to Addresses")
@@ -354,8 +365,87 @@ export async function handleDashboardButton(
     );
 
     await (interaction as ButtonInteraction).update({
-      content: "Pick a network to add/update (shows current address):",
-      components: [networkRow, backRow],
+      content: "Pick a network to add/update (shows current address), or set one address across all networks:",
+      components: [networkRow, actionsRow],
+    });
+
+    return true;
+  }
+
+  if (interaction.customId === "dash:user:add:all") {
+    const modal = new ModalBuilder()
+      .setCustomId("dash:user:add:all:modal")
+      .setTitle("Set address on all networks");
+
+    const input = new TextInputBuilder()
+      .setCustomId("addressInput")
+      .setLabel("Address")
+      .setPlaceholder("0x...")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+    );
+
+    await (interaction as ButtonInteraction).showModal(modal);
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:user:add:all:confirm:")) {
+    const parts = interaction.customId.split(":");
+    const mode = parts[5]; // override | missing
+    const rawAddress = parts.slice(6).join(":");
+    assert(mode === "override" || mode === "missing", "Invalid mode");
+    assert(viem.isAddress(rawAddress), "Invalid address");
+
+    const guildId = interaction.guildId!;
+    const userId = interaction.user.id;
+
+    const current = await deps.userModel.getUser(userId, guildId);
+    const byChain = new Map(current.map((x) => [x.chainId, x.address] as const));
+
+    let updated = 0;
+    for (const chain of Chains) {
+      const hasExisting = byChain.has(chain.chainId);
+      if (mode === "missing" && hasExisting) continue;
+      await deps.userModel.setAddress(userId, guildId, chain.chainId, rawAddress);
+      updated += 1;
+    }
+
+    const addresses = await deps.userModel.getUser(userId, guildId);
+    const addressLines = addresses.length
+      ? addresses
+          .sort((a, b) => a.chainId - b.chainId)
+          .map(({ chainId, address }) => {
+            const chainName = ChainsById[chainId]?.name ?? String(chainId);
+            return `• **${chainName}** (${chainId}) — \`${address}\``;
+          })
+          .join("\n")
+      : "_No addresses set yet._";
+
+    const rows = [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:user:add")
+          .setLabel("Add / update")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:user:remove")
+          .setLabel("Remove")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId("dash:home")
+          .setLabel("← Back")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ];
+
+    await (interaction as ButtonInteraction).update({
+      content:
+        `✅ Updated **${updated}** network(s) with \`${rawAddress}\` (${mode === "override" ? "override existing" : "missing only"}).\n\n` +
+        `**Addresses**\n\n${addressLines}`,
+      components: rows,
     });
 
     return true;
@@ -827,6 +917,58 @@ export async function handleDashboardModalSubmit(
   deps: DashboardDeps,
 ): Promise<boolean> {
   if (!interaction.isModalSubmit()) return false;
+
+  if (interaction.customId === "dash:user:add:all:modal") {
+    const guildId = interaction.guildId;
+    const userId = interaction.user.id;
+    assert(guildId, "Guild not found");
+
+    const rawAddressInput = interaction.fields.getTextInputValue("addressInput").trim();
+    assert(viem.isAddress(rawAddressInput), "Invalid address");
+    const normalizedAddress = viem.getAddress(rawAddressInput);
+
+    const current = await deps.userModel.getUser(userId, guildId);
+    const existingCount = current.length;
+
+    if (existingCount === 0) {
+      for (const chain of Chains) {
+        await deps.userModel.setAddress(userId, guildId, chain.chainId, normalizedAddress);
+      }
+
+      await interaction.reply({
+        content:
+          `✅ Set address \`${normalizedAddress}\` on **${Chains.length}** network(s).\n` +
+          `Open **Addresses** to review.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`dash:user:add:all:confirm:override:${normalizedAddress}`)
+        .setLabel("Override existing")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`dash:user:add:all:confirm:missing:${normalizedAddress}`)
+        .setLabel("Set missing only")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("dash:user:add")
+        .setLabel("Cancel / Back")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.reply({
+      content:
+        `You already have **${existingCount}** address(es) set.\n\n` +
+        `Applying \`${normalizedAddress}\` to all networks can override existing values. Choose an option:`,
+      components: [row],
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
   if (interaction.customId !== "dash:admin:address-search:modal") return false;
 
   const guildId = interaction.guildId;
