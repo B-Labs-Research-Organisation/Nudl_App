@@ -1056,7 +1056,7 @@ export async function main(): Promise<void> {
             assert(guildId, "Guild not found");
             assert(guild, "Guild not found");
             const address = interaction.options.getString("address", true);
-            const usersWithAddress = await safeModel.getUsersByAddress(
+            const usersWithAddress = await userModel.getUsersByAddress(
               guildId,
               address,
             );
@@ -1074,32 +1074,29 @@ export async function main(): Promise<void> {
                 try {
                   const chain = ChainsById[chainId];
                   const user = await guild.members.fetch(userId);
-                  return { user, chain }; // Return an object with user and chain
+                  return { user, chain, address };
                 } catch (error) {
-                  console.error(
-                    `Error fetching user data for userId ${userId}:`,
-                    error,
-                  );
-                  return null; // Return null for filtering out errors
+                  // Not a current member in this guild; ignore for this admin view.
+                  return null;
                 }
               }),
             ).then((results) => results.filter((result) => result !== null));
 
             const groupedUserAddresses: Record<
               string,
-              { user: GuildMember; chain: ChainSummary }[]
+              { user: GuildMember; chain: ChainSummary; address: string }[]
             > = _.groupBy(userAddresses, "user.id");
             const userCards: string = renderUsers(
               Object.entries(groupedUserAddresses).map(
-                ([userId, addresses]: [
+                ([, addresses]: [
                   string,
-                  { user: GuildMember; chain: ChainSummary }[],
+                  { user: GuildMember; chain: ChainSummary; address: string }[],
                 ]) => {
-                  const user: GuildMember = addresses[0].user; // Get the user from the first address
+                  const user: GuildMember = addresses[0].user;
                   const chainAddresses: {
                     chain: ChainSummary;
                     address: string;
-                  }[] = addresses.map(({ chain }) => ({ chain, address }));
+                  }[] = addresses.map(({ chain, address }) => ({ chain, address }));
                   return [user, chainAddresses];
                 },
               ),

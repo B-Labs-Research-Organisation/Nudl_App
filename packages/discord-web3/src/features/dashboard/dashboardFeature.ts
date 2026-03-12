@@ -859,6 +859,7 @@ export async function handleDashboardModalSubmit(
   }
 
   const lines: string[] = [];
+  let filteredOutNotInGuild = 0;
   for (const [userId, entries] of grouped.entries()) {
     let who = `<@${userId}>`;
     let label = userId;
@@ -868,16 +869,9 @@ export async function handleDashboardModalSubmit(
       who = `<@${member.id}>`;
       label = member.displayName || member.user.username || member.id;
     } catch {
-      // Fallback for users not currently in guild member cache/list.
-      try {
-        const user = await interaction.client.users.fetch(userId);
-        // Avoid <@id> mention when not in guild; Discord can render this as @unknown-user.
-        who = `@${user.username}`;
-        label = user.username || user.id;
-      } catch {
-        who = `Unknown user`;
-        label = `Unknown user (${userId})`;
-      }
+      // Strict guild scope: skip records for users not currently in this guild.
+      filteredOutNotInGuild += entries.length;
+      continue;
     }
 
     const chains = entries
@@ -891,10 +885,26 @@ export async function handleDashboardModalSubmit(
     lines.push(`• ${who} — **${label}** (id: \`${userId}\`)\n  Chains: ${chains}`);
   }
 
+  if (lines.length === 0) {
+    await interaction.reply({
+      content:
+        `No current guild members found for address: ${rawAddress}` +
+        (filteredOutNotInGuild > 0
+          ? `\n(Filtered out ${filteredOutNotInGuild} historical record(s) for users not currently in this guild.)`
+          : ""),
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
   await interaction.reply({
     content:
       `**Users found for address** \`${rawAddress}\`\n` +
-      `Matches: **${usersWithAddress.length}** record(s), **${grouped.size}** user(s)\n\n` +
+      `Matches: **${usersWithAddress.length}** record(s) total, **${lines.length}** current guild user(s)` +
+      (filteredOutNotInGuild > 0
+        ? `\nFiltered out: **${filteredOutNotInGuild}** non-member record(s)`
+        : "") +
+      `\n\n` +
       lines.join("\n"),
     flags: MessageFlags.Ephemeral,
     allowedMentions: { users: Array.from(grouped.keys()) },
