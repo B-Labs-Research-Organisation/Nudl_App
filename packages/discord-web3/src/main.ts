@@ -1,21 +1,3 @@
-// TODO: on filtering users see if we can add a button to do a payout, automoatically  populate form with user names
-// TODO: add pagination to output for admin_list_addresses
-// TODO: add admin search by address field to existing list addresse call
-// TODO: finish csv airdrop 
-// TODO: command to make missing address notification
-// TODO: filter by channel name not working
-
-
-// TODO: donation UI 
-// TODO: use full token addresses in token manager
-
-// DONE: Safe and token management within ui
-// DONE: add network dropdown in token managment page
-// DONE: fix search by address whichs reutrning must be 20000 fewer in length
-// DONE: Warning if overriding a safe - add dynamic wording based on new/existing safe
-// DONE: when listing your own addresses make sure formatting is the same as other lists
-// DONE: Fix new safe address with prefix
-
 import {
   User,
   Routes,
