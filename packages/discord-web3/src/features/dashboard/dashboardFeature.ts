@@ -857,19 +857,22 @@ export async function handleDashboardModalSubmit(
 
   const lines: string[] = [];
   for (const [userId, entries] of grouped.entries()) {
-    let mention = `<@${userId}>`;
+    let who = `<@${userId}>`;
     let label = userId;
+
     try {
       const member = await guild.members.fetch(userId);
-      mention = `<@${member.id}>`;
+      who = `<@${member.id}>`;
       label = member.displayName || member.user.username || member.id;
     } catch {
       // Fallback for users not currently in guild member cache/list.
       try {
         const user = await interaction.client.users.fetch(userId);
-        mention = `<@${user.id}>`;
+        // Avoid <@id> mention when not in guild; Discord can render this as @unknown-user.
+        who = `@${user.username}`;
         label = user.username || user.id;
       } catch {
+        who = `Unknown user`;
         label = `Unknown user (${userId})`;
       }
     }
@@ -882,7 +885,7 @@ export async function handleDashboardModalSubmit(
       })
       .join(", ");
 
-    lines.push(`• ${mention} — **${label}** (id: \`${userId}\`)\n  Chains: ${chains}`);
+    lines.push(`• ${who} — **${label}** (id: \`${userId}\`)\n  Chains: ${chains}`);
   }
 
   await interaction.reply({
