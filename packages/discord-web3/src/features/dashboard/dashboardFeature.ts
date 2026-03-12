@@ -768,8 +768,11 @@ export async function handleDashboardButton(
     }
 
     if (members === null) {
-      // manual mode should not hit prefill normally, but be defensive
-      members = Array.from(guild.members.cache.values()).filter((m) => !m.user.bot);
+      // "all" mode (or defensive fallback): all current guild members with an address on this chain.
+      const allMembers = Array.from(guild.members.cache.values()).filter((m) => !m.user.bot);
+      const addressed = await deps.userModel.getUsersByChain(payout.chainId, guild.id);
+      const addressedIds = new Set(addressed.map((u) => u.userId));
+      members = allMembers.filter((m) => addressedIds.has(m.id));
     }
 
     if (!members.length) {
@@ -1156,6 +1159,10 @@ export async function handleDashboardSelectMenu(
           .setCustomId(`dash:admin:payout:recipients:${payoutId}:manual`)
           .setLabel("Manual paste")
           .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:recipients:${payoutId}:all`)
+          .setLabel("All with addresses")
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId(`dash:admin:payout:recipients:${payoutId}:role`)
           .setLabel("By role")
