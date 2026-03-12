@@ -39,6 +39,10 @@ export type DashboardDeps = {
       chainId: number,
       guildId: string,
     ): Promise<{ userId: string; chainId: number; address: string }[]>;
+    getUsersByAddress(
+      guildId: string,
+      address: string,
+    ): Promise<{ userId: string; chainId: number; address: string }[]>;
     deleteAddress(
       userId: string,
       guildId: string,
@@ -156,6 +160,10 @@ export async function handleDashboardAdminCommand(
       new ButtonBuilder()
         .setCustomId("dash:admin:missing:start")
         .setLabel("Notify missing addresses")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("dash:admin:address-search:start")
+        .setLabel("Find users by address")
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
@@ -435,6 +443,10 @@ export async function handleDashboardButton(
           .setCustomId("dash:admin:missing:start")
           .setLabel("Notify missing addresses")
           .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin:address-search:start")
+          .setLabel("Find users by address")
+          .setStyle(ButtonStyle.Secondary),
       ),
     ];
 
@@ -532,6 +544,26 @@ export async function handleDashboardButton(
       components: [chainRow, backRow],
     });
 
+    return true;
+  }
+
+  if (interaction.customId === "dash:admin:address-search:start") {
+    const modal = new ModalBuilder()
+      .setCustomId("dash:admin:address-search:modal")
+      .setTitle("Find users by address");
+
+    const input = new TextInputBuilder()
+      .setCustomId("addressInput")
+      .setLabel("Wallet address")
+      .setPlaceholder("0x...")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(input),
+    );
+
+    await (interaction as ButtonInteraction).showModal(modal);
     return true;
   }
 
@@ -785,6 +817,75 @@ export async function handleDashboardButton(
   }
 
   return false;
+}
+
+export async function handleDashboardModalSubmit(
+  interaction: Interaction,
+  deps: DashboardDeps,
+): Promise<boolean> {
+  if (!interaction.isModalSubmit()) return false;
+  if (interaction.customId !== "dash:admin:address-search:modal") return false;
+
+  const guildId = interaction.guildId;
+  const guild = interaction.guild;
+  assert(guildId, "Guild not found");
+  assert(guild, "Guild not found");
+
+  const rawAddress = interaction.fields.getTextInputValue("addressInput").trim();
+  const normalizedAddress = rawAddress.toLowerCase();
+  const usersWithAddress = await deps.userModel.getUsersByAddress(
+    guildId,
+    normalizedAddress,
+  );
+
+  if (usersWithAddress.length === 0) {
+    await interaction.reply({
+      content: `No users found for address: ${rawAddress}`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
+  const grouped = new Map<string, { chainId: number; address: string }[]>();
+  for (const entry of usersWithAddress) {
+    const existing = grouped.get(entry.userId) ?? [];
+    existing.push({ chainId: entry.chainId, address: entry.address });
+    grouped.set(entry.userId, existing);
+  }
+
+  const lines: string[] = [];
+  for (const [userId, entries] of grouped.entries()) {
+    let mention = `<@${userId}>`;
+    let label = userId;
+    try {
+      const member = await guild.members.fetch(userId);
+      mention = `<@${member.id}>`;
+      label = member.displayName || member.user.username || member.id;
+    } catch {
+      // keep fallback values
+    }
+
+    const chains = entries
+      .sort((a, b) => a.chainId - b.chainId)
+      .map((e) => {
+        const chainName = ChainsById[e.chainId]?.name ?? String(e.chainId);
+        return `${chainName} (${e.chainId})`;
+      })
+      .join(", ");
+
+    lines.push(`• ${mention} — **${label}** (id: \`${userId}\`)\n  Chains: ${chains}`);
+  }
+
+  await interaction.reply({
+    content:
+      `**Users found for address** \`${rawAddress}\`\n` +
+      `Matches: **${usersWithAddress.length}** record(s), **${grouped.size}** user(s)\n\n` +
+      lines.join("\n"),
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: { users: Array.from(grouped.keys()) },
+  });
+
+  return true;
 }
 
 export async function handleDashboardSelectMenu(

@@ -1,4 +1,4 @@
-import { isAddress } from "viem";
+import { getAddress as toChecksumAddress, isAddress } from "viem";
 import { encodeKey, decodeKey } from "./utils";
 import { createClient } from "redis";
 
@@ -244,8 +244,9 @@ export function Users(store: Store<string, string>) {
     if (!isAddress(address)) {
       throw new Error("Invalid Address");
     }
+    const normalizedAddress = toChecksumAddress(address);
     const key = encodeKey([userId, guildId, chainId].filter(Boolean));
-    await store.set(key, address);
+    await store.set(key, normalizedAddress);
   }
 
   async function getAddress(
@@ -317,11 +318,12 @@ export function Users(store: Store<string, string>) {
     guildId: string,
     address: string,
   ): Promise<{ userId: string; chainId: number; address: string }[]> {
+    const queryAddress = address.toLowerCase();
     const entries = await store.entries();
     return Array.from(entries)
       .filter(([key, value]) => {
         const [, storedGuildId] = decodeKey(key);
-        return storedGuildId === guildId && value === address;
+        return storedGuildId === guildId && value.toLowerCase() === queryAddress;
       })
       .map(([key, address]: [string, string]) => {
         const [userId, , chainId] = decodeKey(key);

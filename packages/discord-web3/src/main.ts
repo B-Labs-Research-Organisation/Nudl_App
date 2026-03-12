@@ -98,6 +98,7 @@ import {
   handleDashboardAdminCommand,
   handleDashboardButton,
   handleDashboardCommand,
+  handleDashboardModalSubmit,
   handleDashboardSelectMenu,
 } from "./features/dashboard/dashboardFeature";
 
@@ -1189,6 +1190,17 @@ export async function main(): Promise<void> {
       }
     } else if (interaction.isModalSubmit()) {
       try {
+        if (
+          await handleDashboardModalSubmit(interaction, {
+            userModel,
+            tokenModel,
+            safeModel,
+            stores: { payouts },
+            ui,
+          })
+        ) {
+          return;
+        }
         if (await handleTokensModalSubmit(interaction, { tokenModel })) {
           return;
         }
