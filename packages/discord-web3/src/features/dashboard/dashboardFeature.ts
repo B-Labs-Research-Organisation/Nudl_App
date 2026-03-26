@@ -21,6 +21,7 @@ import * as viem from "viem";
 import {
   Chains,
   ChainsById,
+  fetchGuildMembersCached,
   getAdminManageSafesDisplay,
   getAdminManageTokensDisplay,
 } from "../../utils";
@@ -826,8 +827,12 @@ export async function handleDashboardButton(
     const guild = interaction.guild;
     assert(guild, "This command can only be used within a guild.");
 
+    let allGuildMembers: any;
     try {
-      await guild.members.fetch();
+      allGuildMembers = await fetchGuildMembersCached(guild, {
+        ttlMs: 60_000,
+        allowStaleOnError: true,
+      });
     } catch (err: any) {
       const retryAfter = err?.data?.retry_after;
       if (typeof retryAfter === "number") {
@@ -877,7 +882,9 @@ export async function handleDashboardButton(
 
     if (members === null) {
       // "all" mode (or defensive fallback): all current guild members with an address on this chain.
-      const allMembers = Array.from(guild.members.cache.values()).filter((m) => !m.user.bot);
+      const allMembers: any[] = Array.from((allGuildMembers as any).values()).filter(
+        (m: any) => !m.user.bot,
+      );
       const addressed = await deps.userModel.getUsersByChain(payout.chainId, guild.id);
       const addressedIds = new Set(addressed.map((u) => u.userId));
       members = allMembers.filter((m) => addressedIds.has(m.id));

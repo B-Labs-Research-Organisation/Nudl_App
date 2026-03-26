@@ -22,6 +22,7 @@ import {
   Chains,
   ChainsById,
   ChainSummary,
+  fetchGuildMembersCached,
   renderUser,
   renderUsers,
 } from "../../utils";
@@ -189,7 +190,10 @@ export async function handleAddressesCommands(
 
     let allDiscordUsers: any;
     try {
-      allDiscordUsers = await guild.members.fetch();
+      allDiscordUsers = await fetchGuildMembersCached(guild, {
+        ttlMs: 60_000,
+        allowStaleOnError: true,
+      });
     } catch (err: any) {
       const retryAfter = err?.data?.retry_after;
       if (typeof retryAfter === "number") {
@@ -383,7 +387,10 @@ export async function handleAddAddressButton(
 
     let allDiscordUsers: any;
     try {
-      allDiscordUsers = await guild.members.fetch();
+      allDiscordUsers = await fetchGuildMembersCached(guild, {
+        ttlMs: 60_000,
+        allowStaleOnError: true,
+      });
     } catch (err: any) {
       const retryAfter = err?.data?.retry_after;
       if (typeof retryAfter === "number") {

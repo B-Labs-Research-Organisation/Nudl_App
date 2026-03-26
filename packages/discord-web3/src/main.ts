@@ -42,6 +42,7 @@ import {
   tokenSelectionDisplay,
   tokenRemovalSelectionDisplay,
   fetchErc20TokenInfo,
+  fetchGuildMembersCached,
 } from "./utils";
 import { Service as RouterService } from "./router";
 import assert from "assert";
@@ -641,11 +642,11 @@ export async function main(): Promise<void> {
             const exportToFile =
               interaction.options.getBoolean("export") || false;
 
-            // Fetch all members of the server only if not already cached
-            if (guild.members.cache.size === 0) {
-              await guild.members.fetch();
-            }
-            const allDiscordUsers = guild.members.cache;
+            // Fetch members via cached helper to avoid gateway member-request bursts.
+            const allDiscordUsers = await fetchGuildMembersCached(guild, {
+              ttlMs: 60_000,
+              allowStaleOnError: true,
+            });
             
 
             // Filter users based on optional filters

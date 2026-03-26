@@ -23,6 +23,8 @@ import {
   TextChannel,
   Utils,
   GuildMember,
+  Guild,
+  Collection,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   CacheType,
@@ -116,6 +118,54 @@ export function mapChainsById(): Record<number, ChainSummary> {
 }
 
 export const ChainsById = mapChainsById();
+
+type GuildMembersCacheEntry = {
+  fetchedAt: number;
+  members: Collection<string, GuildMember>;
+};
+
+const guildMembersCache = new Map<string, GuildMembersCacheEntry>();
+const guildMembersInFlight = new Map<string, Promise<Collection<string, GuildMember>>>();
+
+export async function fetchGuildMembersCached(
+  guild: Guild,
+  opts?: { ttlMs?: number; allowStaleOnError?: boolean; forceRefresh?: boolean },
+): Promise<Collection<string, GuildMember>> {
+  const ttlMs = opts?.ttlMs ?? 60_000;
+  const allowStaleOnError = opts?.allowStaleOnError ?? true;
+  const forceRefresh = opts?.forceRefresh ?? false;
+
+  const now = Date.now();
+  const existing = guildMembersCache.get(guild.id);
+
+  if (!forceRefresh && existing && now - existing.fetchedAt < ttlMs) {
+    return existing.members;
+  }
+
+  const inFlight = guildMembersInFlight.get(guild.id);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      await guild.members.fetch();
+      const members = guild.members.cache;
+      guildMembersCache.set(guild.id, { fetchedAt: Date.now(), members });
+      return members;
+    } catch (err) {
+      if (allowStaleOnError && existing) {
+        return existing.members;
+      }
+      throw err;
+    } finally {
+      guildMembersInFlight.delete(guild.id);
+    }
+  })();
+
+  guildMembersInFlight.set(guild.id, fetchPromise);
+  return fetchPromise;
+}
 
 export interface RpcParams {
   id: string | undefined;
