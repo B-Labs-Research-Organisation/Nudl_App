@@ -708,16 +708,6 @@ export async function handleDashboardButton(
     const rows = [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId("dash:admin:tokens")
-          .setLabel("Manage tokens")
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId("dash:admin:safes")
-          .setLabel("Manage safes")
-          .setStyle(ButtonStyle.Primary),
-      ),
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
           .setCustomId("dash:admin:payout:start")
           .setLabel("Start payout")
           .setStyle(ButtonStyle.Success),
@@ -732,6 +722,16 @@ export async function handleDashboardButton(
         new ButtonBuilder()
           .setCustomId("dash:admin:addrdir:start")
           .setLabel("Address directory")
+          .setStyle(ButtonStyle.Primary),
+      ),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("dash:admin:tokens")
+          .setLabel("Manage tokens")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin:safes")
+          .setLabel("Manage safes")
           .setStyle(ButtonStyle.Primary),
       ),
     ];
