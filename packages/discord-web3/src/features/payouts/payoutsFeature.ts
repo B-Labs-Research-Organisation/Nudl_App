@@ -217,12 +217,21 @@ export async function handlePayoutsModalSubmit(
       );
     }
 
-    await interaction.reply({
+    const responsePayload = {
       content:
         `✅ Donation updated: **${donateAmount.toFixed(4)}** (adds an extra line item; total spend increases).`,
       components: [row],
-      flags: MessageFlags.Ephemeral,
-    });
+    };
+
+    // If modal originated from a component, prefer updating that original message.
+    try {
+      await (interaction as any).update(responsePayload);
+    } catch {
+      await interaction.reply({
+        ...responsePayload,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
 
     return true;
   }
