@@ -338,6 +338,10 @@ export async function handleDashboardAdminCommand(
         .setCustomId("dash:admin:address-search:start")
         .setLabel("Find users by address")
         .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("dash:admin:addrdir:start")
+        .setLabel("Address directory")
+        .setStyle(ButtonStyle.Primary),
     ),
   ];
 
