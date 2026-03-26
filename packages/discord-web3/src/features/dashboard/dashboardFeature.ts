@@ -26,6 +26,17 @@ import {
   getAdminManageTokensDisplay,
 } from "../../utils";
 
+type AddressDirectorySession = {
+  id: string;
+  guildId: string;
+  ownerId: string;
+  network: number | "all";
+  roleId?: string;
+  channelId?: string;
+};
+
+const addressDirectorySessions: Record<string, AddressDirectorySession> = {};
+
 export type DashboardDeps = {
   userModel: {
     getUser(
@@ -44,6 +55,9 @@ export type DashboardDeps = {
     getUsersByAddress(
       guildId: string,
       address: string,
+    ): Promise<{ userId: string; chainId: number; address: string }[]>;
+    getAllAddresses(
+      guildId: string,
     ): Promise<{ userId: string; chainId: number; address: string }[]>;
     setAddress(
       userId: string,
@@ -71,6 +85,157 @@ export type DashboardDeps = {
     pendingAddressOverride: Record<string, { chainId: number; address: string }>;
   };
 };
+
+async function computeAddressDirectoryResult(
+  interaction: Interaction,
+  deps: DashboardDeps,
+  session: AddressDirectorySession,
+) {
+  const guild = interaction.guild;
+  assert(guild, "This command can only be used within a guild.");
+
+  const allGuildMembers = await fetchGuildMembersCached(guild, {
+    ttlMs: 60_000,
+    allowStaleOnError: true,
+  });
+
+  let members: any[] = Array.from((allGuildMembers as any).values()).filter(
+    (m: any) => !m.user.bot,
+  );
+
+  if (session.roleId) {
+    await guild.roles.fetch();
+    const role = guild.roles.cache.get(session.roleId);
+    if (!role) members = [];
+    else {
+      const roleSet = new Set(Array.from(role.members.keys()));
+      members = members.filter((m) => roleSet.has(m.id));
+    }
+  }
+
+  if (session.channelId) {
+    const ch = await guild.channels.fetch(session.channelId);
+    if (!ch || !ch.isTextBased()) members = [];
+    else {
+      const chSet = new Set(Array.from((ch as TextChannel).members.keys()));
+      members = members.filter((m) => chSet.has(m.id));
+    }
+  }
+
+  let records = await deps.userModel.getAllAddresses(guild.id);
+  if (session.network !== "all") {
+    records = records.filter((r) => r.chainId === session.network);
+  }
+
+  const memberSet = new Set(members.map((m) => m.id));
+  records = records.filter((r) => memberSet.has(r.userId));
+
+  const byUser = new Map<string, { chainId: number; address: string }[]>();
+  for (const r of records) {
+    const list = byUser.get(r.userId) ?? [];
+    list.push({ chainId: r.chainId, address: r.address });
+    byUser.set(r.userId, list);
+  }
+
+  return { members, records, byUser };
+}
+
+async function renderAddressDirectoryView(
+  interaction: Interaction,
+  deps: DashboardDeps,
+  session: AddressDirectorySession,
+) {
+  const guild = interaction.guild;
+  assert(guild, "This command can only be used within a guild.");
+
+  const { members, records, byUser } = await computeAddressDirectoryResult(
+    interaction,
+    deps,
+    session,
+  );
+
+  const networkLabel =
+    session.network === "all"
+      ? "All networks"
+      : `${ChainsById[session.network]?.name ?? session.network} (${session.network})`;
+
+  let roleLabel = "(none)";
+  if (session.roleId) {
+    await guild.roles.fetch();
+    roleLabel = guild.roles.cache.get(session.roleId)?.name ?? session.roleId;
+  }
+
+  let channelLabel = "(none)";
+  if (session.channelId) {
+    const ch = await guild.channels.fetch(session.channelId);
+    channelLabel = (ch as any)?.name ? `#${(ch as any).name}` : session.channelId;
+  }
+
+  const preview = Array.from(byUser.entries())
+    .slice(0, 8)
+    .map(([userId, list]) => {
+      const chainSummary = list
+        .slice(0, 2)
+        .map((x) => ChainsById[x.chainId]?.shortName ?? String(x.chainId))
+        .join(", ");
+      return `• <@${userId}> — ${list.length} addr (${chainSummary}${list.length > 2 ? ", ..." : ""})`;
+    })
+    .join("\n");
+
+  const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`dash:admin:addrdir:network:${session.id}`)
+      .setPlaceholder(`Network: ${networkLabel}`)
+      .addOptions([
+        { label: "All networks", value: "all" },
+        ...Chains.map((c) => ({ label: c.name, value: String(c.chainId) })),
+      ]),
+  );
+
+  const roleRow = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+    new RoleSelectMenuBuilder()
+      .setCustomId(`dash:admin:addrdir:role:${session.id}`)
+      .setPlaceholder(`Role: ${roleLabel}`)
+      .setMinValues(0)
+      .setMaxValues(1),
+  );
+
+  const channelRow = new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+    new ChannelSelectMenuBuilder()
+      .setCustomId(`dash:admin:addrdir:channel:${session.id}`)
+      .setPlaceholder(`Channel: ${channelLabel}`)
+      .setMinValues(0)
+      .setMaxValues(1),
+  );
+
+  const actionsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`dash:admin:addrdir:export:${session.id}`)
+      .setLabel("Export CSV")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(records.length === 0),
+    new ButtonBuilder()
+      .setCustomId(`dash:admin:addrdir:reset:${session.id}`)
+      .setLabel("Clear filters")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("dash:admin")
+      .setLabel("← Back")
+      .setStyle(ButtonStyle.Secondary),
+  );
+
+  const content =
+    "**Address directory**\n\n" +
+    `Network: **${networkLabel}**\n` +
+    `Role: **${roleLabel}**\n` +
+    `Channel: **${channelLabel}**\n\n` +
+    `Users in filter: **${members.length}**\n` +
+    `Users with addresses: **${byUser.size}**\n` +
+    `Address records: **${records.length}**\n\n` +
+    (preview ? `Preview:\n${preview}` : "_No matching address records for current filters._");
+
+  return { content, components: [networkRow, roleRow, channelRow, actionsRow], records, byUser };
+}
 
 export async function handleDashboardCommand(
   interaction: Interaction,
@@ -538,6 +703,10 @@ export async function handleDashboardButton(
           .setCustomId("dash:admin:address-search:start")
           .setLabel("Find users by address")
           .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin:addrdir:start")
+          .setLabel("Address directory")
+          .setStyle(ButtonStyle.Primary),
       ),
     ];
 
@@ -655,6 +824,86 @@ export async function handleDashboardButton(
     );
 
     await (interaction as ButtonInteraction).showModal(modal);
+    return true;
+  }
+
+  if (interaction.customId === "dash:admin:addrdir:start") {
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const sessionId = String(Date.now());
+    addressDirectorySessions[sessionId] = {
+      id: sessionId,
+      guildId,
+      ownerId: interaction.user.id,
+      network: "all",
+    };
+
+    const view = await renderAddressDirectoryView(
+      interaction,
+      deps,
+      addressDirectorySessions[sessionId],
+    );
+
+    await (interaction as ButtonInteraction).update({
+      content: view.content,
+      components: view.components,
+      allowedMentions: { users: [] },
+    });
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:addrdir:export:")) {
+    const sessionId = interaction.customId.split(":")[4];
+    const session = addressDirectorySessions[sessionId];
+    assert(session, "Address directory session not found");
+
+    const { records } = await computeAddressDirectoryResult(interaction, deps, session);
+    if (!records.length) {
+      await interaction.reply({
+        content: "No rows to export for current filters.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const header = "user_id,chain_id,chain_name,address";
+    const lines = records.map((r) => {
+      const chainName = ChainsById[r.chainId]?.name ?? String(r.chainId);
+      return `${r.userId},${r.chainId},\"${chainName.replace(/\"/g, '""')}\",${r.address}`;
+    });
+
+    const csv = [header, ...lines].join("\n") + "\n";
+    const networkTag = session.network === "all" ? "all" : String(session.network);
+
+    await interaction.reply({
+      content: `Exported **${records.length}** address row(s).`,
+      files: [
+        {
+          name: `address-directory_${networkTag}_${Date.now()}.csv`,
+          attachment: Buffer.from(csv, "utf-8"),
+        },
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:addrdir:reset:")) {
+    const sessionId = interaction.customId.split(":")[4];
+    const session = addressDirectorySessions[sessionId];
+    assert(session, "Address directory session not found");
+
+    session.network = "all";
+    session.roleId = undefined;
+    session.channelId = undefined;
+
+    const view = await renderAddressDirectoryView(interaction, deps, session);
+    await (interaction as ButtonInteraction).update({
+      content: view.content,
+      components: view.components,
+      allowedMentions: { users: [] },
+    });
     return true;
   }
 
@@ -1090,6 +1339,57 @@ export async function handleDashboardSelectMenu(
     !interaction.isChannelSelectMenu()
   ) {
     return false;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:addrdir:network:")) {
+    const sessionId = interaction.customId.split(":")[4];
+    const session = addressDirectorySessions[sessionId];
+    assert(session, "Address directory session not found");
+
+    const value = (interaction as any).values?.[0];
+    session.network = value === "all" ? "all" : Number(value);
+
+    const view = await renderAddressDirectoryView(interaction, deps, session);
+    await (interaction as any).update({
+      content: view.content,
+      components: view.components,
+      allowedMentions: { users: [] },
+    });
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:addrdir:role:")) {
+    const sessionId = interaction.customId.split(":")[4];
+    const session = addressDirectorySessions[sessionId];
+    assert(session, "Address directory session not found");
+
+    const value = (interaction as any).values?.[0];
+    session.roleId = value || undefined;
+
+    const view = await renderAddressDirectoryView(interaction, deps, session);
+    await (interaction as any).update({
+      content: view.content,
+      components: view.components,
+      allowedMentions: { users: [] },
+    });
+    return true;
+  }
+
+  if (interaction.customId.startsWith("dash:admin:addrdir:channel:")) {
+    const sessionId = interaction.customId.split(":")[4];
+    const session = addressDirectorySessions[sessionId];
+    assert(session, "Address directory session not found");
+
+    const value = (interaction as any).values?.[0];
+    session.channelId = value || undefined;
+
+    const view = await renderAddressDirectoryView(interaction, deps, session);
+    await (interaction as any).update({
+      content: view.content,
+      components: view.components,
+      allowedMentions: { users: [] },
+    });
+    return true;
   }
 
   async function computeMissingUsers(params: {
