@@ -826,7 +826,27 @@ export async function handleDashboardButton(
     const guild = interaction.guild;
     assert(guild, "This command can only be used within a guild.");
 
-    await guild.members.fetch();
+    try {
+      await guild.members.fetch();
+    } catch (err: any) {
+      const retryAfter = err?.data?.retry_after;
+      if (typeof retryAfter === "number") {
+        const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("dash:admin")
+            .setLabel("← Back")
+            .setStyle(ButtonStyle.Secondary),
+        );
+        await (interaction as ButtonInteraction).update({
+          content: `Discord gateway rate limit hit while fetching members. Please wait ~${Math.ceil(
+            retryAfter,
+          )}s and try again.`,
+          components: [backRow],
+        });
+        return true;
+      }
+      throw err;
+    }
 
     // Build candidate set from role/channel sources directly (more reliable than filtering the full member list).
     let members: any[] | null = null;
