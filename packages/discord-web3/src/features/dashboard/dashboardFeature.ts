@@ -910,13 +910,14 @@ export async function handleDashboardButton(
     });
 
     const esc = (v: any) => `\"${String(v ?? "").replace(/\"/g, '""')}\"`;
-    const header = "user_id,display_name,username,chain_id,chain_name,address";
-    const lines = sortedRecords.map((r) => {
+    const header = "index,user_id,display_name,username,chain_id,chain_name,address";
+    const lines = sortedRecords.map((r, i) => {
       const m: any = memberById.get(r.userId);
       const displayName = m?.displayName ?? m?.user?.globalName ?? m?.user?.username ?? "";
       const username = m?.user?.username ?? "";
       const chainName = ChainsById[r.chainId]?.name ?? String(r.chainId);
       return [
+        esc(i + 1),
         esc(r.userId),
         esc(displayName),
         esc(username),
