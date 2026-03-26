@@ -191,7 +191,7 @@ export async function handlePayoutsModalSubmit(
       new ButtonBuilder()
         .setCustomId(`payoutDonateModal_${payoutId}`)
         .setLabel("Donation (optional)")
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Success),
     );
 
     if (payout.type === "disperse") {
@@ -252,7 +252,7 @@ export async function handlePayoutsModalSubmit(
           new ButtonBuilder()
             .setCustomId(`payoutDonateModal_${payoutId}`)
             .setLabel("Donation (optional)")
-            .setStyle(ButtonStyle.Secondary),
+            .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
             .setCustomId(`dispersePayoutButton_${payoutId}`)
             .setLabel(`Generate Disperse file (${chainName})`)
@@ -280,7 +280,7 @@ export async function handlePayoutsModalSubmit(
           new ButtonBuilder()
             .setCustomId(`payoutDonateModal_${payoutId}`)
             .setLabel("Donation (optional)")
-            .setStyle(ButtonStyle.Secondary),
+            .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
             .setCustomId(`safePayoutButton_${payoutId}`)
             .setLabel(`Continue Safe setup (${chainName})`)
@@ -308,7 +308,7 @@ export async function handlePayoutsModalSubmit(
           new ButtonBuilder()
             .setCustomId(`payoutDonateModal_${payoutId}`)
             .setLabel("Donation (optional)")
-            .setStyle(ButtonStyle.Secondary),
+            .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
             .setCustomId(`setTokenButton_${payoutId}`)
             .setLabel(`Select token (${chainName})`)

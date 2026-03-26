@@ -730,10 +730,9 @@ export async function handleDashboardButton(
         .setStyle(ButtonStyle.Secondary),
     );
 
-    await (interaction as ButtonInteraction).reply({
+    await (interaction as ButtonInteraction).update({
       content: `Select a network for **${platform}** payout:`,
       components: [networkRow, cancelRow],
-      flags: MessageFlags.Ephemeral,
     });
 
     return true;
@@ -801,7 +800,7 @@ export async function handleDashboardButton(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`dash:admin:payout:prefill:${payoutId}`)
-          .setLabel("Prefill CSV (userId,0) + open modal")
+          .setLabel("Set amounts")
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId("dash:admin")
@@ -810,11 +809,10 @@ export async function handleDashboardButton(
       ),
     );
 
-    await (interaction as ButtonInteraction).reply({
+    await (interaction as ButtonInteraction).update({
       content:
-        "Choose recipients. We’ll prefill the CSV with `userId,0` so you only edit amounts.",
+        "Choose recipients. We’ll prepare the list and then you can set amounts.",
       components: rows,
-      flags: MessageFlags.Ephemeral,
     });
 
     return true;
@@ -1308,10 +1306,6 @@ export async function handleDashboardSelectMenu(
     const rows = [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`dash:admin:payout:recipients:${payoutId}:manual`)
-          .setLabel("Manual paste")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
           .setCustomId(`dash:admin:payout:recipients:${payoutId}:all`)
           .setLabel("All with addresses")
           .setStyle(ButtonStyle.Success),
@@ -1323,12 +1317,16 @@ export async function handleDashboardSelectMenu(
           .setCustomId(`dash:admin:payout:recipients:${payoutId}:channel`)
           .setLabel("By channel")
           .setStyle(ButtonStyle.Primary),
-      ),
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`dash:admin:payout:recipients:${payoutId}:role-channel`)
           .setLabel("Role + channel")
           .setStyle(ButtonStyle.Primary),
+      ),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`dash:admin:payout:recipients:${payoutId}:manual`)
+          .setLabel("Manual paste")
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId("dash:admin")
           .setLabel("Cancel / Back")
@@ -1409,7 +1407,7 @@ export async function handleDashboardSelectMenu(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`dash:admin:payout:prefill:${payoutId}`)
-          .setLabel("Prefill CSV (userId,0) + open modal")
+          .setLabel("Set amounts")
           .setStyle(ButtonStyle.Primary)
           .setDisabled(count === 0),
         new ButtonBuilder()
@@ -1491,7 +1489,7 @@ export async function handleDashboardSelectMenu(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`dash:admin:payout:prefill:${payoutId}`)
-          .setLabel("Prefill CSV (userId,0) + open modal")
+          .setLabel("Set amounts")
           .setStyle(ButtonStyle.Primary)
           .setDisabled(count === 0),
         new ButtonBuilder()
