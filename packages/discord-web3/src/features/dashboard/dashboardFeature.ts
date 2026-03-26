@@ -171,16 +171,38 @@ async function renderAddressDirectoryView(
     channelLabel = (ch as any)?.name ? `#${(ch as any).name}` : session.channelId;
   }
 
-  const preview = Array.from(byUser.entries())
-    .slice(0, 8)
+  const memberById = new Map(members.map((m: any) => [m.id, m] as const));
+
+  const sortedPreviewRows = Array.from(byUser.entries())
     .map(([userId, list]) => {
-      const chainSummary = list
-        .slice(0, 2)
+      const m: any = memberById.get(userId);
+      const displayName = m?.displayName ?? m?.user?.globalName ?? m?.user?.username ?? userId;
+      const username = m?.user?.username ?? "unknown";
+      const sortedList = [...list].sort((a, b) => a.chainId - b.chainId);
+      const chainSummary = sortedList
+        .slice(0, 3)
         .map((x) => ChainsById[x.chainId]?.shortName ?? String(x.chainId))
         .join(", ");
-      return `• <@${userId}> — ${list.length} addr (${chainSummary}${list.length > 2 ? ", ..." : ""})`;
+      return {
+        displayName: String(displayName).toLowerCase(),
+        line: `• **${displayName}** (@${username}) — ${sortedList.length} addr (${chainSummary}${sortedList.length > 3 ? ", ..." : ""})`,
+      };
     })
-    .join("\n");
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  const previewLines: string[] = [];
+  let previewChars = 0;
+  for (const row of sortedPreviewRows) {
+    const next = row.line + "\n";
+    if (previewLines.length >= 20 || previewChars + next.length > 1200) break;
+    previewLines.push(row.line);
+    previewChars += next.length;
+  }
+
+  const remaining = sortedPreviewRows.length - previewLines.length;
+  const preview =
+    previewLines.join("\n") +
+    (remaining > 0 ? `\n...and **${remaining}** more user(s)` : "");
 
   const networkRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
@@ -862,7 +884,7 @@ export async function handleDashboardButton(
     const session = addressDirectorySessions[sessionId];
     assert(session, "Address directory session not found");
 
-    const { records } = await computeAddressDirectoryResult(interaction, deps, session);
+    const { records, members } = await computeAddressDirectoryResult(interaction, deps, session);
     if (!records.length) {
       await interaction.reply({
         content: "No rows to export for current filters.",
@@ -871,10 +893,37 @@ export async function handleDashboardButton(
       return true;
     }
 
-    const header = "user_id,chain_id,chain_name,address";
-    const lines = records.map((r) => {
+    const memberById = new Map(members.map((m: any) => [m.id, m] as const));
+
+    const sortedRecords = [...records].sort((a, b) => {
+      const ma: any = memberById.get(a.userId);
+      const mb: any = memberById.get(b.userId);
+      const aName = (ma?.displayName ?? ma?.user?.globalName ?? ma?.user?.username ?? a.userId)
+        .toString()
+        .toLowerCase();
+      const bName = (mb?.displayName ?? mb?.user?.globalName ?? mb?.user?.username ?? b.userId)
+        .toString()
+        .toLowerCase();
+      const cmp = aName.localeCompare(bName);
+      if (cmp !== 0) return cmp;
+      return a.chainId - b.chainId;
+    });
+
+    const esc = (v: any) => `\"${String(v ?? "").replace(/\"/g, '""')}\"`;
+    const header = "user_id,display_name,username,chain_id,chain_name,address";
+    const lines = sortedRecords.map((r) => {
+      const m: any = memberById.get(r.userId);
+      const displayName = m?.displayName ?? m?.user?.globalName ?? m?.user?.username ?? "";
+      const username = m?.user?.username ?? "";
       const chainName = ChainsById[r.chainId]?.name ?? String(r.chainId);
-      return `${r.userId},${r.chainId},\"${chainName.replace(/\"/g, '""')}\",${r.address}`;
+      return [
+        esc(r.userId),
+        esc(displayName),
+        esc(username),
+        esc(r.chainId),
+        esc(chainName),
+        esc(r.address),
+      ].join(",");
     });
 
     const csv = [header, ...lines].join("\n") + "\n";
