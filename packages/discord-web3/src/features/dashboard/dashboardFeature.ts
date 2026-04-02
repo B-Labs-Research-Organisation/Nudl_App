@@ -1232,11 +1232,19 @@ export async function handleDashboardButton(
 
     const modal = new ModalBuilder()
       .setCustomId(`payoutModal_${payoutId}`)
-      .setTitle(`Set amounts (${chainName})`);
+      .setTitle(
+        payout.type === "nudl-app"
+          ? `Set amounts / points (${chainName})`
+          : `Set amounts (${chainName})`,
+      );
 
     const input = new TextInputBuilder()
       .setCustomId(`csvInput`)
-      .setLabel("Edit amounts (userId,amount)")
+      .setLabel(
+        payout.type === "nudl-app"
+          ? "Edit rows (userId,amount,points)"
+          : "Edit amounts (userId,amount)",
+      )
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(true)
       .setValue(prefill);
