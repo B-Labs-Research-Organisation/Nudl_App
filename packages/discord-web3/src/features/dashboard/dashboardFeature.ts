@@ -988,6 +988,10 @@ export async function handleDashboardButton(
           .setCustomId("dash:admin:payout:platform:csv-airdrop")
           .setLabel("CSV Airdrop")
           .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("dash:admin:payout:platform:nudl-app")
+          .setLabel("nudl-app")
+          .setStyle(ButtonStyle.Primary),
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -1009,7 +1013,7 @@ export async function handleDashboardButton(
   if (interaction.customId.startsWith("dash:admin:payout:platform:")) {
     const platform = interaction.customId.split(":")[4];
     assert(
-      platform === "safe" || platform === "disperse" || platform === "csv-airdrop",
+      platform === "safe" || platform === "disperse" || platform === "csv-airdrop" || platform === "nudl-app",
       "Invalid platform",
     );
 
@@ -1052,6 +1056,7 @@ export async function handleDashboardButton(
 
     if (mode === "manual") {
       const chainName = ChainsById[payout.chainId]?.name ?? String(payout.chainId);
+      const isNudlApp = payout.type === "nudl-app";
 
       const modal = new ModalBuilder()
         .setCustomId(`payoutModal_${payoutId}`)
@@ -1059,7 +1064,11 @@ export async function handleDashboardButton(
 
       const input = new TextInputBuilder()
         .setCustomId(`csvInput`)
-        .setLabel("Paste CSV (discordid,amount per line)")
+        .setLabel(
+          isNudlApp
+            ? "Paste CSV (discordid,amount,points; amount/points optional)"
+            : "Paste CSV (discordid,amount per line)",
+        )
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true);
 
@@ -1213,6 +1222,9 @@ export async function handleDashboardButton(
       .map((m) => {
         const display = m.displayName || m.user?.username || m.id;
         const uname = m.user?.username;
+        if (payout.type === "nudl-app") {
+          return uname ? `${display} (@${uname}),,` : `${display},,`;
+        }
         return uname ? `${display} (@${uname}),0` : `${display},0`;
       })
       .join("\n");
@@ -1664,7 +1676,7 @@ export async function handleDashboardSelectMenu(
   if (interaction.customId.startsWith("dash:admin:payout:network:")) {
     const platform = interaction.customId.split(":")[4];
     assert(
-      platform === "safe" || platform === "disperse" || platform === "csv-airdrop",
+      platform === "safe" || platform === "disperse" || platform === "csv-airdrop" || platform === "nudl-app",
       "Invalid platform",
     );
 

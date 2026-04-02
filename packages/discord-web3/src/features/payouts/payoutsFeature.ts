@@ -77,7 +77,14 @@ export type PayoutsFeatureDeps = {
 async function buildPayoutConfigSummary(
   interaction: Interaction,
   payout: any,
-  opts?: { recipientCount?: number; tokenSymbol?: string; tokenName?: string },
+  opts?: {
+    recipientCount?: number;
+    tokenSymbol?: string;
+    tokenName?: string;
+    amountCount?: number;
+    pointsCount?: number;
+    bothCount?: number;
+  },
 ): Promise<string> {
   const chainId = Number(payout?.chainId);
   const chainName = ChainsById[chainId]?.name ?? String(chainId);
@@ -124,6 +131,9 @@ async function buildPayoutConfigSummary(
     `• Role filter: ${roleLabel}`,
     `• Channel filter: ${channelLabel}`,
     `• Parsed recipients: ${opts?.recipientCount ?? 0}`,
+    typeof opts?.amountCount === "number" ? `• Rows with amount: ${opts.amountCount}` : null,
+    typeof opts?.pointsCount === "number" ? `• Rows with points: ${opts.pointsCount}` : null,
+    typeof opts?.bothCount === "number" ? `• Rows with both: ${opts.bothCount}` : null,
     payout?.donateAmount ? `• Donation: ${Number(payout.donateAmount)}${opts?.tokenSymbol ? ` ${opts.tokenSymbol}` : ""}` : null,
   ]
     .filter(Boolean)
@@ -333,6 +343,25 @@ export async function handlePayoutsModalSubmit(
             `✅ CSV captured for **CSV Airdrop** on **${chainName}**.` +
             donateLine +
             `\nNext: select token (Safe CSV Airdrop needs token_address per row).`,
+          components: [row],
+          flags: MessageFlags.Ephemeral,
+        });
+
+        return true;
+      }
+
+      if (payout.type === "nudl-app") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`nudlAppGenerate_${payoutId}`)
+            .setLabel(`Generate nudl-app CSV (${chainName})`)
+            .setStyle(ButtonStyle.Primary),
+        );
+
+        await interaction.reply({
+          content:
+            `✅ CSV captured for **nudl-app** on **${chainName}**.` +
+            `\nNext: generate the export file (supports amount, points, or both).`,
           components: [row],
           flags: MessageFlags.Ephemeral,
         });
@@ -1075,6 +1104,118 @@ export async function handlePayoutsButton(
     await interaction.reply({
       content: `${description}${summary}`,
       files: [file],
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  // nudl-app generator
+  if (interaction.customId.startsWith("nudlAppGenerate_")) {
+    const [_, payoutId] = interaction.customId.split("_");
+    const payout = payouts[payoutId];
+    if (!payout) {
+      await interaction.reply({
+        content: `Unable to find payout list, try searching again`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    assert(payout.type === "nudl-app", "Invalid payout type");
+    const csvData = payout.csvData;
+    assert(csvData, "Payout CSV not found");
+
+    const guildId = interaction.guildId;
+    assert(guildId, "Guild not found");
+
+    const chainId = payout.chainId;
+    assert(chainId, "ChainId not found");
+
+    const lines = csvData
+      .split("\n")
+      .map((line: string) => line.trim())
+      .filter((line: string) => line.length > 0 && !line.startsWith("#"));
+
+    const errors: string[] = [];
+    const entries: { address: string; amount?: string; points?: string }[] = [];
+    let amountCount = 0;
+    let pointsCount = 0;
+    let bothCount = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const parts = lines[i].split(",");
+      const idRaw = (parts[0] ?? "").trim();
+      const amountRaw = (parts[1] ?? "").trim();
+      const pointsRaw = (parts[2] ?? "").trim();
+
+      if (!idRaw) {
+        errors.push(`Line ${i + 1}: Missing user identifier`);
+        continue;
+      }
+      if (!amountRaw && !pointsRaw) {
+        errors.push(`Line ${i + 1}: Must provide amount, points, or both`);
+        continue;
+      }
+      if (amountRaw && !Number.isFinite(Number(amountRaw))) {
+        errors.push(`Line ${i + 1}: Invalid amount "${amountRaw}"`);
+        continue;
+      }
+      if (pointsRaw && !Number.isFinite(Number(pointsRaw))) {
+        errors.push(`Line ${i + 1}: Invalid points "${pointsRaw}"`);
+        continue;
+      }
+
+      const user = await resolveDiscordUser(client, idRaw, guildId);
+      if (!user) {
+        errors.push(`Line ${i + 1}: Could not resolve user "${idRaw}"`);
+        continue;
+      }
+
+      const address = await userModel.getAddress(user.id, guildId, chainId);
+      if (!address) {
+        errors.push(`Line ${i + 1}: No address found for ${idRaw} on chain ${chainId}`);
+        continue;
+      }
+
+      if (amountRaw) amountCount += 1;
+      if (pointsRaw) pointsCount += 1;
+      if (amountRaw && pointsRaw) bothCount += 1;
+
+      entries.push({
+        address,
+        ...(amountRaw ? { amount: amountRaw } : {}),
+        ...(pointsRaw ? { points: pointsRaw } : {}),
+      });
+    }
+
+    const out = [
+      "address,amount,points",
+      ...entries.map((e) => `${e.address},${e.amount ?? ""},${e.points ?? ""}`),
+    ].join("\n") + "\n";
+
+    const chainName = ChainsById[Number(chainId)]?.name ?? String(chainId);
+    const summary = await buildPayoutConfigSummary(interaction, payout, {
+      recipientCount: entries.length,
+      amountCount,
+      pointsCount,
+      bothCount,
+    });
+
+    const contentLines = [
+      `✅ nudl-app CSV generated for **${chainName}**.`,
+      errors.length ? `\n⚠️ Issues found:\n\`\`\`\n${errors.join("\n")}\n\`\`\`` : "",
+      summary,
+    ].filter(Boolean);
+
+    await interaction.reply({
+      content: contentLines.join("\n"),
+      files: [
+        {
+          name: `nudl-app_${chainName}_${Date.now()}.csv`,
+          attachment: Buffer.from(out, "utf-8"),
+        },
+      ],
       flags: MessageFlags.Ephemeral,
     });
 
